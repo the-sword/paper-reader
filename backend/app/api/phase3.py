@@ -10,6 +10,7 @@ from ..services import backup as backup_svc
 from ..services import jobs as jobs_svc
 from ..services import glossary_cache as term_svc
 from ..services import library
+from ..services import prefs as prefs_svc
 from ..services import summarize as sum_svc
 
 router = APIRouter()
@@ -193,3 +194,23 @@ def restore_backup() -> dict[str, Any]:
         return backup_svc.restore()
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, str(e)) from e
+
+
+# ---------------------------------------------------------------------------
+# 界面偏好（翻译模式等）
+# ---------------------------------------------------------------------------
+
+class PrefsReq(BaseModel):
+    values: dict[str, Any]
+
+
+
+@router.get("/prefs")
+def read_prefs() -> dict[str, Any]:
+    return {"values": prefs_svc.get_all()}
+
+
+
+@router.post("/prefs")
+def write_prefs(body: PrefsReq) -> dict[str, Any]:
+    return {"ok": True, "values": prefs_svc.set_many(body.values)}

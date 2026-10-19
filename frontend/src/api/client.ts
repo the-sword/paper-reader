@@ -262,6 +262,12 @@ export const api = {
       `/reading/${docId}/retranslate`,
       { method: 'POST', body: JSON.stringify({ mode, engine: engine || null, limit: limit ?? null }) }),
 
+  // ---- 界面偏好 ----
+  getPrefs: () => req<{ values: Record<string, unknown> }>('/reading/prefs'),
+  savePrefs: (values: Record<string, unknown>) =>
+    req<{ ok: boolean; values: Record<string, unknown> }>('/reading/prefs',
+      { method: 'POST', body: JSON.stringify({ values }) }),
+
   // ---- 配置 ----
   getEngines: () => req<EngineStatus>('/reading/config/engines'),
   getAIConfig: () => req<AIConfig>('/reading/config/ai'),

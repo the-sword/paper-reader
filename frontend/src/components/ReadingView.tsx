@@ -187,9 +187,35 @@ export default function ReadingView() {
   const [visibleTick, setVisibleTick] = useState(0)
   /** 翻译模式：auto=滚动自动翻译（默认），manual=仅手动 */
   const [autoTranslate, setAutoTranslate] = useState(true)
+  /** 偏好是否已加载（避免用默认值覆盖用户设置） */
+  const prefsLoadedRef = useRef(false)
 
   // ---- 可见性观察：进入视口的段落排队翻译 ----
   //
+  // 启动时加载界面偏好（翻译模式 / 显示模式 / 引擎）
+  useEffect(() => {
+    void api.getPrefs().then(({ values }) => {
+      if (typeof values.translate_mode === 'string') {
+        setAutoTranslate(values.translate_mode !== 'manual')
+      }
+      if (typeof values.reading_mode === 'string'
+          && ['source', 'bilingual', 'zh'].includes(values.reading_mode)) {
+        setMode(values.reading_mode as Mode)
+      }
+      if (typeof values.selected_engine === 'string' && values.selected_engine) {
+        setSelectedEngine(values.selected_engine)
+      }
+      prefsLoadedRef.current = true
+      // 若为自动模式，补一次首屏翻译（此时观察者已记录可见段落）
+      if (values.translate_mode !== 'manual') {
+        setTimeout(() => flushRef.current?.(), 200)
+      }
+    }).catch(() => {
+      prefsLoadedRef.current = true
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setSelectedEngine])
+
   // 可见段落追踪 + 渐进翻译。
   //
   // 行为由「翻译模式」开关决定：
@@ -209,7 +235,8 @@ export default function ReadingView() {
 
   /** 把当前可见 + 未翻译 + 未在飞的段落推入翻译队列 */
   const flushVisible = useCallback((force = false) => {
-    if (!force && !autoModeRef.current) return
+    // 偏好尚未加载完成时，不自动翻译（避免用户设为手动却先触发一次）
+    if (!force && (!autoModeRef.current || !prefsLoadedRef.current)) return
     const st = useStore.getState()
     if (!st.aiReady || !st.currentDoc) return
     const todo: string[] = []
@@ -499,7 +526,13 @@ export default function ReadingView() {
           <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 6 }}>翻译引擎</div>
           <select
             value={selectedEngine ?? ''}
-            onChange={(e) => setSelectedEngine(e.target.value || null)}
+            onChange={(e) => {
+              const v = e.target.value || null
+              setSelectedEngine(v)
+              if (prefsLoadedRef.current) {
+                void api.savePrefs({ selected_engine: v ?? '' }).catch(() => {})
+              }
+            }}
             style={{ width: '100%', fontSize: 11, padding: '4px 6px' }}
           >
             <option value="">自动（按优先级）</option>
@@ -519,7 +552,12 @@ export default function ReadingView() {
           {([['source', '仅原文'], ['bilingual', '双语对照'], ['zh', '仅译文']] as const).map(([m, label]) => (
             <div
               key={m}
-              onClick={() => setMode(m)}
+              onClick={() => {
+                setMode(m)
+                if (prefsLoadedRef.current) {
+                  void api.savePrefs({ reading_mode: m }).catch(() => {})
+                }
+              }}
               style={{
                 fontSize: 12, padding: '5px 8px', borderRadius: 5, cursor: 'pointer',
                 marginBottom: 3,
@@ -539,7 +577,12 @@ export default function ReadingView() {
             ] as Array<[boolean, string]>).map(([v, label]) => (
               <button
                 key={label}
-                onClick={() => setAutoTranslate(v)}
+                onClick={() => {
+                  setAutoTranslate(v)
+                  if (prefsLoadedRef.current) {
+                    void api.savePrefs({ translate_mode: v ? 'auto' : 'manual' }).catch(() => {})
+                  }
+                }}
                 title={v
                   ? '滚动到视口内的段落会自动翻译'
                   : '只在你点击按钮时翻译'}
