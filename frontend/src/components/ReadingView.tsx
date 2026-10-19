@@ -976,16 +976,18 @@ function SegmentBlock({
       ref={register}
       data-segid={seg.id}
       className={`seg-block${marks.length ? ' has-mark' : ''}`}
-      style={{ margin: '14px 0' }}
+      style={{
+        margin: '14px 0',
+        ['--mark-color' as string]:
+          (marks.find((m) => m.side === 'source') ?? marks[0])?.color ?? 'transparent',
+      }}
     >
       {mode !== 'zh' && (
         <p
           ref={srcRef}
-          className={srcMarks.length ? 'marked-text' : undefined}
           style={{
             margin: 0, fontSize: 15, lineHeight: 1.9, color: 'var(--fg-strong)',
             textAlign: 'justify',
-            ['--mark-color' as string]: srcMarks[0]?.color ?? 'transparent',
           }}
         >
           <RichText text={seg.source} highlights={srcRanges} onCite={onCite} />
@@ -1008,7 +1010,6 @@ function SegmentBlock({
             textAlign: 'justify',
             color: mode === 'zh' ? 'var(--fg-strong)' : 'var(--fg)',
             minHeight: 20,
-            ['--mark-color' as string]: zhMarks[0]?.color ?? 'transparent',
           }}
         >
           {zh
