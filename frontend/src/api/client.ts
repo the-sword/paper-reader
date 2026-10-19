@@ -209,6 +209,24 @@ export const api = {
     req<{ id: string; kind: string; content: string; model?: string; input_chars?: number }>(
       `/reading/summary/${docId}`,
       { method: 'POST', body: JSON.stringify({ kind, question: question || null }) }),
+  startSummary: (docId: string, kind: string, question?: string) =>
+    req<{ job_id: string; status: string }>(
+      `/reading/summary/${docId}/start`,
+      { method: 'POST', body: JSON.stringify({ kind, question: question || null }) }),
+  summaryJob: (jobId: string) =>
+    req<{
+      id: string
+      kind: string
+      status: 'running' | 'done' | 'failed' | 'cancelled'
+      progress: number
+      message: string
+      result: null | { id: string; content: string; model?: string; input_chars?: number }
+      error: string | null
+    }>(`/reading/summary/job/${jobId}`),
+  cancelSummary: (jobId: string) =>
+    req<{ ok: boolean; status: string }>(
+      `/reading/summary/job/${jobId}/cancel`, { method: 'POST' }),
+
   listSummaries: (docId: string) =>
     req<{ summaries: SummaryItem[] }>(`/reading/summary/${docId}`),
   deleteSummary: (id: string) =>

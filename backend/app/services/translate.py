@@ -154,9 +154,14 @@ class RateLimitError(RuntimeError):
     """接口限流（rpm/tpm 耗尽）。"""
 
 
+class Cancelled(RuntimeError):
+    """任务被用户取消。"""
+
+
 def _post_with_retry(url: str, payload: dict[str, Any], headers: dict[str, str],
                      max_attempts: int = 4, timeout: float = 90,
-                     total_budget: float = 240) -> dict[str, Any]:
+                     total_budget: float = 240,
+                     cancel_event: Any = None) -> dict[str, Any]:
     """带指数退避的请求，处理中转站限流与临时故障。
 
     三个时间约束，避免「无限等待」：
@@ -172,7 +177,12 @@ def _post_with_retry(url: str, payload: dict[str, Any], headers: dict[str, str],
     deadline = start + total_budget
     last_err = ""
 
+    def _check_cancel() -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise Cancelled("已取消")
+
     for attempt in range(max_attempts):
+        _check_cancel()
         remaining = deadline - time.time()
         if remaining < 5:
             last_err = f"总耗时超过 {total_budget:.0f}s 预算（{last_err}）"
@@ -187,7 +197,12 @@ def _post_with_retry(url: str, payload: dict[str, Any], headers: dict[str, str],
             if attempt < max_attempts - 1:
                 pause = min(2 ** attempt, 15, max(0, deadline - time.time() - 5))
                 if pause > 0:
-                    time.sleep(pause)
+                    if cancel_event is not None:
+                        # 可被取消打断的等待
+                        if cancel_event.wait(pause):
+                            raise Cancelled("已取消")
+                    else:
+                        time.sleep(pause)
                 continue
             raise RuntimeError(
                 f"AI 接口连接失败（已重试 {attempt + 1} 次，耗时 {time.time() - start:.0f}s）：{last_err}"
@@ -213,7 +228,11 @@ def _post_with_retry(url: str, payload: dict[str, Any], headers: dict[str, str],
                 pass
         delay = min(delay, max(0, deadline - time.time() - 5))
         if delay > 0:
-            time.sleep(delay)
+            if cancel_event is not None:
+                if cancel_event.wait(delay):
+                    raise Cancelled("已取消")
+            else:
+                time.sleep(delay)
 
     elapsed = time.time() - start
     if "429" in last_err:

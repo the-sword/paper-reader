@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..core.db import db
+from ..core.http import make_client
 from . import translate as ai_mod
 
 # 每种类型的 prompt 模板
@@ -136,8 +137,19 @@ def _build_corpus(doc_id: str) -> tuple[str, int]:
     return corpus, len(corpus)
 
 
-def _call_ai(system: str, user: str) -> dict[str, Any]:
-    """调用 AI，复用 translate 模块的配置与重试。"""
+def _call_ai(system: str, user: str, cancel_event: Any = None,
+             on_progress: Any = None) -> dict[str, Any]:
+    """调用 AI 生成总结。
+
+    使用**流式**请求，带来两个好处：
+      1. 取消能立即生效：关闭连接即可中断，不必等整个响应返回
+      2. 可在生成过程中报告进度
+
+    若服务端不支持流式（返回非 SSE），自动回退到非流式请求。
+    """
+    import json as _json
+    import time
+
     cfg = ai_mod.get_ai_config()
     if not cfg.get("base_url") or not cfg.get("api_key"):
         raise RuntimeError("未配置 AI 接口，无法生成总结")
@@ -150,33 +162,94 @@ def _call_ai(system: str, user: str) -> dict[str, Any]:
             {"role": "user", "content": user},
         ],
         "temperature": 0.3,
+        "stream": True,
     }
     headers = {
         "Authorization": f"Bearer {cfg['api_key']}",
         "Content-Type": "application/json",
     }
-    # 总结属于长请求：单次最多 90s，整体不超过 150s，重试 2 次
-    # 避免中转站无响应时前端长时间空转
-    body = ai_mod._post_with_retry(
-        url, payload, headers,
-        max_attempts=2, timeout=90, total_budget=150,
-    )
+
+    buf: list[str] = []
+    deadline = time.time() + 180  # 整体上限
+
+    try:
+        with make_client(url, timeout=120) as client:
+            with client.stream("POST", url, json=payload, headers=headers) as resp:
+                if resp.status_code != 200:
+                    body = resp.read().decode("utf-8", "replace")[:300]
+                    raise RuntimeError(f"AI 接口 HTTP {resp.status_code}: {body}")
+
+                ctype = (resp.headers.get("content-type") or "").lower()
+                if "text/event-stream" not in ctype and "stream" not in ctype:
+                    # 服务端不支持流式，回退
+                    raw = resp.read().decode("utf-8", "replace")
+                    return _parse_nonstream(raw, cfg.get("model"))
+
+                for line in resp.iter_lines():
+                    if cancel_event is not None and cancel_event.is_set():
+                        # 关闭连接，服务端通常也会停止生成
+                        resp.close()
+                        raise ai_mod.Cancelled("已取消")
+                    if time.time() > deadline:
+                        resp.close()
+                        raise RuntimeError("生成超时（超过 180 秒）")
+
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            obj = _json.loads(data)
+                        except Exception:
+                            continue
+                        choices = obj.get("choices") or []
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta") or {}
+                        piece = delta.get("content")
+                        if piece:
+                            buf.append(piece)
+                            # 每收到一个片段就回报（廉价的计数，便于前端平滑推进）
+                            if on_progress is not None:
+                                on_progress(sum(len(x) for x in buf))
+    except ai_mod.Cancelled:
+        raise
+    except RuntimeError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"AI 接口连接失败：{type(e).__name__}: {e}") from e
+
+    content = "".join(buf).strip()
+    if not content:
+        raise RuntimeError("AI 返回内容为空")
+    return {"content": content, "model": cfg.get("model")}
+
+
+def _parse_nonstream(raw: str, model: str | None) -> dict[str, Any]:
+    """解析非流式响应。"""
+    import json as _json
+
+    try:
+        body = _json.loads(raw)
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"AI 返回非 JSON：{raw[:150]}") from e
     content = (body.get("choices") or [{}])[0].get("message", {}).get("content", "")
     if not content.strip():
         raise RuntimeError("AI 返回内容为空")
-    usage = body.get("usage") or {}
-    return {
-        "content": content.strip(),
-        "model": cfg.get("model"),
-        "token_in": usage.get("prompt_tokens"),
-        "token_out": usage.get("completion_tokens"),
-    }
+    return {"content": content.strip(), "model": model}
 
 
-def generate(doc_id: str, kind: str, question: str | None = None) -> dict[str, Any]:
+def generate(doc_id: str, kind: str, question: str | None = None,
+             cancel_event: Any = None,
+             on_progress: Any = None) -> dict[str, Any]:
     """生成一份总结并保存。"""
     if kind not in TEMPLATES and kind != "qa":
         raise ValueError(f"未知的总结类型：{kind}")
+
+    if cancel_event is not None and cancel_event.is_set():
+        raise ai_mod.Cancelled("已取消")
 
     corpus, chars = _build_corpus(doc_id)
 
@@ -194,7 +267,10 @@ def generate(doc_id: str, kind: str, question: str | None = None) -> dict[str, A
         system = tpl["system"]
         user = f"以下是论文内容：\n\n{corpus}"
 
-    res = _call_ai(system, user)
+    res = _call_ai(system, user, cancel_event=cancel_event, on_progress=on_progress)
+
+    if cancel_event is not None and cancel_event.is_set():
+        raise ai_mod.Cancelled("已取消")
 
     sid = str(uuid.uuid4())
     with db() as conn:
