@@ -72,6 +72,56 @@ function InlineMath({ latex }: { latex: string }) {
   return <span ref={ref} />
 }
 
+/**
+ * 把一段纯文本按引用标 [7,11,20] 切分。
+ * 只匹配纯数字与逗号/连字符组合，避免误伤 [a] 之类的普通方括号。
+ */
+export function splitCitations(
+  text: string,
+): Array<{ type: 'text' | 'cite'; value: string; numbers?: number[]; start: number }> {
+  const out: Array<{ type: 'text' | 'cite'; value: string; numbers?: number[]; start: number }> = []
+
+  // 含未渲染的 LaTeX 命令时不做引用识别：
+  // MinerU 偶尔会把公式漏掉 $ 包裹，此时 \times[R] 之类的方括号
+  // 会被误判成引用标，导致切分错位。宁可整段不识别，也不出错。
+  if (/\\[a-zA-Z]{2,}/.test(text)) {
+    return [{ type: 'text', value: text, start: 0 }]
+  }
+  // 排除 LaTeX 结构（如 \\times、\\mathbb{R}）中的方括号：
+  // 前面不能是反斜杠，且方括号内只能是数字与分隔符
+  const re = /(?<!\\)\[(\d{1,3}(?:\s*[,\-–]\s*\d{1,3})*)\]/g
+  let last = 0
+  let m: RegExpExecArray | null
+
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) {
+      out.push({ type: 'text', value: text.slice(last, m.index), start: last })
+    }
+
+    // 展开 [3-6] 这类区间
+    const numbers: number[] = []
+    for (const part of m[1].split(',')) {
+      const seg = part.trim()
+      const range = /^(\d+)\s*[-–]\s*(\d+)$/.exec(seg)
+      if (range) {
+        const a = parseInt(range[1], 10)
+        const b = parseInt(range[2], 10)
+        if (b >= a && b - a < 30) {
+          for (let i = a; i <= b; i++) numbers.push(i)
+          continue
+        }
+      }
+      const n = parseInt(seg, 10)
+      if (!Number.isNaN(n)) numbers.push(n)
+    }
+
+    out.push({ type: 'cite', value: m[0], numbers, start: m.index })
+    last = m.index + m[0].length
+  }
+  if (last < text.length) out.push({ type: 'text', value: text.slice(last), start: last })
+  return out
+}
+
 export interface HighlightRange {
   start: number
   end: number
@@ -127,8 +177,13 @@ function renderWithHighlights(
 
 /** 渲染含行内公式的段落，可选高亮区间 */
 export default function RichText({
-  text, highlights,
-}: { text: string; highlights?: HighlightRange[] }) {
+  text, highlights, onCite,
+}: {
+  text: string
+  highlights?: HighlightRange[]
+  /** 点击引用标时回调，参数为引用编号列表 */
+  onCite?: (numbers: number[], anchor: HTMLElement) => void
+}) {
   const parts = useMemo(() => splitInlineMath(text), [text])
 
   // 不含公式且无需高亮：直接返回纯文本（避免无谓的 DOM 开销）
@@ -161,11 +216,35 @@ export default function RichText({
         color: h.color,
       }))
 
-    rendered.push(
-      <span key={`t${i}`}>
-        {renderWithHighlights(p.value, local, `t${i}`)}
-      </span>,
-    )
+    // 文本片段内再按引用标切分，使 [7,11] 可点击
+    const cites = onCite
+      ? splitCitations(p.value)
+      : [{ type: 'text' as const, value: p.value, start: 0 }]
+    const nodeParts: React.ReactNode[] = []
+
+    cites.forEach((c, ci) => {
+      if (c.type === 'cite') {
+        nodeParts.push(
+          <cite
+            key={`c${ci}`}
+            className="cite-ref"
+            title="点击查看参考文献"
+            onClick={(e) => {
+              e.stopPropagation()
+              onCite?.(c.numbers ?? [], e.currentTarget as HTMLElement)
+            }}
+          >{c.value}</cite>,
+        )
+      } else if (c.value) {
+        nodeParts.push(
+          <span key={`tx${ci}`}>
+            {renderWithHighlights(c.value, local, `t${i}-${ci}`)}
+          </span>,
+        )
+      }
+    })
+
+    rendered.push(<span key={`t${i}`}>{nodeParts}</span>)
   })
 
   return <>{rendered}</>

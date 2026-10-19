@@ -107,6 +107,15 @@ export interface EngineTestResult {
   latency_ms?: number
   error?: string
 }
+export interface Reference {
+  no: number
+  idx: number
+  text: string
+  authors: string
+  title: string
+  year: number | null
+  venue: string
+}
 export interface TermResult {
   source: string
   text: string
@@ -204,6 +213,10 @@ export const api = {
     }>(
       `/reading/${docId}/translate`,
       { method: 'POST', body: JSON.stringify({ segment_ids: segmentIds, force, engine: engine || null }) }),
+
+  // ---- 参考文献 ----
+  getReferences: (docId: string) =>
+    req<{ count: number; references: Reference[] }>(`/reading/${docId}/references`),
 
   // ---- 划词翻译 ----
   translateTerm: (text: string, engine?: string | null) =>

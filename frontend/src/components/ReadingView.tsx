@@ -356,6 +356,44 @@ export default function ReadingView() {
 
 
   // 按段落聚合标注，传给段落渲染
+  /** 参考文献表与点击弹层 */
+  const [refs, setRefs] = useState<Record<number, import('../api/client').Reference>>({})
+  const [citePopup, setCitePopup] = useState<{
+    x: number; y: number; numbers: number[]
+  } | null>(null)
+
+  // 加载参考文献
+  useEffect(() => {
+    if (!currentDoc) { setRefs({}); return }
+    void api.getReferences(currentDoc.id).then((r) => {
+      const map: Record<number, import('../api/client').Reference> = {}
+      for (const x of r.references) map[x.no] = x
+      setRefs(map)
+    }).catch(() => setRefs({}))
+  }, [currentDoc])
+
+  /** 点击引用标 */
+  const onCite = (numbers: number[], anchor: HTMLElement) => {
+    const r = anchor.getBoundingClientRect()
+    setCitePopup({
+      x: r.left + r.width / 2,
+      y: r.bottom + 6,
+      numbers,
+    })
+  }
+
+  /** 点击空白处关闭参考文献弹层 */
+  useEffect(() => {
+    if (!citePopup) return
+    const close = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('.cite-popup') || t.closest('.cite-ref')) return
+      setCitePopup(null)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [citePopup])
+
   /** 重翻流程状态 */
   const [retranslating, setRetranslating] = useState(false)
   const [retransMsg, setRetransMsg] = useState('')
@@ -477,6 +515,7 @@ export default function ReadingView() {
               zh={translations[seg.id]?.text}
               inflight={useStore.getState().inflight.has(seg.id)}
               marks={annBySegment[seg.id] ?? []}
+              onCite={onCite}
               register={(el) => {
                 if (el) itemRefs.current.set(seg.id, el)
                 else itemRefs.current.delete(seg.id)
@@ -573,6 +612,43 @@ export default function ReadingView() {
           </div>
         )}
       </div>
+
+      {/* 参考文献弹层 */}
+      {citePopup && (
+        <div
+          className="cite-popup"
+          style={{ left: citePopup.x, top: citePopup.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {citePopup.numbers.length === 0 && (
+            <div className="hint">未找到引用信息</div>
+          )}
+          {citePopup.numbers.map((n) => {
+            const ref = refs[n]
+            return (
+              <div key={n} className="cite-item">
+                {ref ? (
+                  <>
+                    <div className="cite-no">[{n}]</div>
+                    <div className="cite-body">
+                      <div className="cite-title">{ref.title || ref.text.slice(0, 120)}</div>
+                      {ref.authors && <div className="cite-authors">{ref.authors}</div>}
+                      <div className="cite-meta">
+                        {ref.year ?? ''}{ref.venue ? ` · ${ref.venue}` : ''}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="cite-body">
+                    <div className="cite-title">[{n}] 未在该文献的参考文献列表中找到</div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          <button className="btn-ghost cite-close" onClick={() => setCitePopup(null)}>✕</button>
+        </div>
+      )}
 
       {/* 右侧：模式与进度 */}
       <div style={{
@@ -721,7 +797,7 @@ interface Mark {
 }
 
 function SegmentBlock({
-  seg, mode, zh, inflight, marks, register,
+  seg, mode, zh, inflight, marks, register, onCite,
 }: {
   seg: Segment
   mode: Mode
@@ -729,6 +805,7 @@ function SegmentBlock({
   inflight: boolean
   marks: Mark[]
   register: (el: HTMLElement | null) => void
+  onCite?: (numbers: number[], anchor: HTMLElement) => void
 }) {
   const srcRef = useRef<HTMLDivElement>(null)
   const zhRef = useRef<HTMLDivElement>(null)
@@ -911,7 +988,7 @@ function SegmentBlock({
             ['--mark-color' as string]: srcMarks[0]?.color ?? 'transparent',
           }}
         >
-          <RichText text={seg.source} highlights={srcRanges} />
+          <RichText text={seg.source} highlights={srcRanges} onCite={onCite} />
           {srcMarks.length > 0 && (
             <span className="seg-mark-count" title={`原文有 ${srcMarks.length} 条标注`}>
               {srcMarks.length}
@@ -935,7 +1012,7 @@ function SegmentBlock({
           }}
         >
           {zh
-            ? <><RichText text={zh} highlights={zhRanges} />
+            ? <><RichText text={zh} highlights={zhRanges} onCite={onCite} />
                 {zhMarks.length > 0 && (
                   <span className="seg-mark-count" title={`译文有 ${zhMarks.length} 条标注`}>
                     {zhMarks.length}

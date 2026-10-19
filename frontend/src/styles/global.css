@@ -443,3 +443,84 @@ main::-webkit-scrollbar-track { background: transparent; }
   padding: 0;
 }
 .hl-dot:hover { transform: scale(1.08); }
+
+/* ---------- 正文引用标 ---------- */
+.cite-ref {
+  color: var(--accent);
+  cursor: pointer;
+  font-style: normal;
+  font-size: 0.92em;
+  padding: 0 1px;
+  border-bottom: 1px dotted var(--accent);
+  border-radius: 2px;
+  transition: background 0.12s;
+}
+.cite-ref:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+/* ---------- 参考文献弹层 ---------- */
+.cite-popup {
+  position: absolute;
+  transform: translateX(-50%);
+  z-index: 960;
+  min-width: 260px;
+  max-width: 420px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
+  padding: 10px 12px;
+}
+
+.cite-item {
+  display: flex;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.cite-item:last-of-type { border-bottom: none; }
+
+.cite-no {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  min-width: 30px;
+}
+
+.cite-body { flex: 1; min-width: 0; }
+
+.cite-title {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--fg-strong);
+  margin-bottom: 3px;
+  word-break: break-word;
+}
+
+.cite-authors {
+  font-size: 11px;
+  color: var(--fg-muted);
+  line-height: 1.4;
+  margin-bottom: 2px;
+  word-break: break-word;
+}
+
+.cite-meta {
+  font-size: 10.5px;
+  color: var(--fg-muted);
+}
+
+.cite-close {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  font-size: 10px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+}

@@ -149,6 +149,15 @@ def get_segments(doc_id: str) -> dict[str, Any]:
     }
 
 
+@router.get("/{doc_id}/references")
+def get_references(doc_id: str) -> dict[str, Any]:
+    """返回该文档解析出的参考文献列表，供正文引用标点击时查找。"""
+    if not library.get_document(doc_id):
+        raise HTTPException(404, "文献不存在")
+    refs = parser.parse_references(doc_id)
+    return {"count": len(refs), "references": refs}
+
+
 # ---------------------------------------------------------------------------
 # 翻译
 # ---------------------------------------------------------------------------

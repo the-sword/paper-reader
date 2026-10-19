@@ -437,3 +437,105 @@ def parse_local_and_save(doc_id: str, pdf_path: Path) -> int:
         raise RuntimeError("本地解析未提取到任何段落（可能是扫描件，需 OCR）")
     n = save_segments(doc_id, segs)
     return n
+
+
+# ---------------------------------------------------------------------------
+# 参考文献解析
+# ---------------------------------------------------------------------------
+
+# 一条参考文献的常见起点：编号前缀
+_REF_NO_RE = re.compile(r"^\s*(?:\[(\d+)\]|(\d+)[.)])\s*")
+
+
+def parse_references(doc_id: str) -> list[dict[str, Any]]:
+    """解析该文档的参考文献列表。
+
+    返回 [{no, text, authors, title, year, venue}]，
+    no 为引用编号（1-based），解析失败时按出现顺序编号。
+    """
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT idx, source FROM segments
+               WHERE document_id=? AND kind='reference' ORDER BY idx""",
+            (doc_id,),
+        ).fetchall()
+
+    out: list[dict[str, Any]] = []
+    for pos, r in enumerate(rows, start=1):
+        raw = (r["source"] or "").strip()
+        if not raw:
+            continue
+
+        m = _REF_NO_RE.match(raw)
+        if m:
+            no = int(m.group(1) or m.group(2))
+            body = raw[m.end():].strip()
+        else:
+            no = pos
+            body = raw
+
+        meta = _split_ref(body)
+        out.append({
+            "no": no,
+            "idx": r["idx"],
+            **meta,
+            "text": body,
+        })
+
+    # 按编号排序，便于前端按序号查找
+    out.sort(key=lambda x: x["no"])
+    return out
+
+
+def _split_ref(body: str) -> dict[str, Any]:
+    """从参考文献正文里尽量抽出作者、标题、年份、出处。
+
+    常见格式：
+      Bao, W., Wang, W., ...: InStereo2k: a large real dataset ... .
+      Black, M.J., Anandan, P.: The robust estimation ... . Computer Vision
+      Cabon, Y., ...: Virtual KITTI 2. arXiv preprint arXiv:2001.10773 (2020)
+    """
+    authors = ""
+    title = ""
+    year = None
+    venue = ""
+
+    # 作者与标题：通常在第一个 ": " 之前
+    sep = body.find(": ")
+    if sep > 0 and sep < 220:
+        authors = body[:sep].strip()
+        rest = body[sep + 2:].strip()
+    else:
+        rest = body
+
+    # 年份：(2020) 或 , 2020.
+    ym = list(re.finditer(r"\((\d{4})[a-z]?\)|\b((?:19|20)\d{2})\b", rest))
+    if ym:
+        last = ym[-1]
+        year = int(last.group(1) or last.group(2))
+        # 标题：从 rest 开头到年份前的最后一个句号
+        cut = last.start()
+        head = rest[:cut].strip()
+        tail = rest[last.end():].strip(" .,")
+        # 去掉纯数字/逗号组成的页码角标（如 "2, 4, 9, 11, 12"）
+        tail = re.sub(r"^[\d\s,.\-–]+$", "", tail).strip()
+        venue = tail[:160]
+        title = head
+    else:
+        title = rest
+
+    # 标题里去掉末尾句点
+    title = title.strip().rstrip(".").strip()
+
+    # 太长时截断，避免前端展示溢出
+    return {
+        "authors": authors[:200],
+        "title": title[:300],
+        "year": year,
+        "venue": venue,
+    }
+
+
+def reference_map(doc_id: str) -> dict[int, dict[str, Any]]:
+    """构建 {编号: 参考文献} 映射，供前端渲染引用标时快速查找。"""
+    return {r["no"]: r for r in parse_references(doc_id)}
