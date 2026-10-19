@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
 from ..core.config import get_settings
+from ..services import engines as engines_svc
 from ..services import library, mineru, parser, translate
 
 router = APIRouter()
@@ -30,6 +31,7 @@ class ParseReq(BaseModel):
 class TranslateReq(BaseModel):
     segment_ids: list[str]
     force: bool = False
+    engine: str | None = None   # 指定引擎；空则按优先级自动降级
 
 
 class AIConfigReq(BaseModel):
@@ -145,7 +147,8 @@ def translate_segments(doc_id: str, body: TranslateReq) -> dict[str, Any]:
     results, errors = [], []
     for sid in body.segment_ids:
         try:
-            results.append(translate.translate_segment(doc_id, sid, force=body.force))
+            results.append(translate.translate_segment(
+                doc_id, sid, force=body.force, engine=body.engine))
         except ValueError as e:
             errors.append({"segment_id": sid, "error": str(e)})
         except Exception as e:  # noqa: BLE001
@@ -197,3 +200,71 @@ def available_engines() -> dict[str, Any]:
         "ai_configured": bool(cfg.get("base_url") and cfg.get("api_key")),
         "local_fallback": True,
     }
+
+
+# ---------------------------------------------------------------------------
+# 翻译引擎管理
+# ---------------------------------------------------------------------------
+
+class EngineConfigReq(BaseModel):
+    enabled: bool | None = None
+    appid: str | None = None
+    appkey: str | None = None
+    domain: str | None = None
+    endpoint: str | None = None
+    region: str | None = None
+
+
+class EngineOrderReq(BaseModel):
+    order: list[str]
+
+
+def _mask(v: str | None) -> str:
+    if not v:
+        return ""
+    if len(v) <= 6:
+        return "已设置"
+    return v[:3] + "…" + v[-3:]
+
+
+@router.get("/engines")
+def list_engines() -> dict[str, Any]:
+    return {"engines": engines_svc.available_engines()}
+
+
+@router.post("/engines/order")
+def set_engine_order(body: EngineOrderReq) -> dict[str, Any]:
+    known = set(engines_svc.ENGINES.keys())
+    order = [x for x in body.order if x in known]
+    engines_svc.set_engine_order(order)
+    return {"ok": True, "order": order}
+
+
+@router.post("/engines/{name}/config")
+def set_engine_config(name: str, body: EngineConfigReq) -> dict[str, Any]:
+    if name not in engines_svc.ENGINES:
+        raise HTTPException(404, "未知引擎")
+    raw = body.model_dump(exclude_none=True)
+    engines_svc.save_engine_config(name, raw)
+    return {"ok": True}
+
+
+@router.post("/engines/{name}/test")
+def test_engine(name: str) -> dict[str, Any]:
+    if name not in engines_svc.ENGINES:
+        raise HTTPException(404, "未知引擎")
+    return engines_svc.test_engine(name)
+
+
+@router.get("/engines/{name}/config")
+def read_engine_config(name: str) -> dict[str, Any]:
+    """读取引擎配置（密钥掩码返回）。"""
+    if name not in engines_svc.ENGINES:
+        raise HTTPException(404, "未知引擎")
+    cfg = engines_svc.get_engine_config(name)
+    safe = {k: v for k, v in cfg.items() if k in ("enabled", "domain", "endpoint", "region")}
+    safe["appid_set"] = bool(cfg.get("appid"))
+    safe["appkey_set"] = bool(cfg.get("appkey"))
+    safe["appid_masked"] = _mask(cfg.get("appid"))
+    safe["appkey_masked"] = _mask(cfg.get("appkey"))
+    return safe

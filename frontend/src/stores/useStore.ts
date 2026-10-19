@@ -24,6 +24,8 @@ interface State {
   aiReady: boolean
   parseState: string
   parseProgress: number
+  engines: import('../api/client').EngineInfo[]
+  selectedEngine: string | null   // null = 自动（按优先级）
 
   // 动作
   refreshLibrary: () => Promise<void>
@@ -42,8 +44,10 @@ interface State {
   loadSegments: (docId: string) => Promise<void>
   startParse: (engine?: 'auto' | 'mineru' | 'local') => Promise<void>
   pollParse: (docId: string) => Promise<void>
-  translateQueue: (ids: string[]) => Promise<void>
+  translateQueue: (ids: string[], engine?: string | null) => Promise<void>
   refreshAIConfig: () => Promise<void>
+  loadEngines: () => Promise<void>
+  setSelectedEngine: (name: string | null) => void
 }
 
 /** 同时在飞的翻译请求上限（中转站常有 rpm 限流，默认保守取 2） */
@@ -69,6 +73,8 @@ export const useStore = create<State>((set, get) => ({
   aiReady: false,
   parseState: 'pending',
   parseProgress: 0,
+  engines: [],
+  selectedEngine: null,
 
   refreshSidebar: async () => {
     const [folders, tags] = await Promise.all([api.listFolders(), api.listTags()])
@@ -167,11 +173,23 @@ export const useStore = create<State>((set, get) => ({
   refreshAIConfig: async () => {
     try {
       const eng = await api.getEngines()
-      set({ aiReady: eng.ai_configured })
+      // 有任何可用引擎就认为可以翻译
+      const list = await api.getEnginesList()
+      const usable = list.engines.filter((e) => e.enabled && e.configured).length
+      set({ aiReady: eng.ai_configured || usable > 0, engines: list.engines })
     } catch {
       set({ aiReady: false })
     }
   },
+
+  loadEngines: async () => {
+    try {
+      const list = await api.getEnginesList()
+      set({ engines: list.engines })
+    } catch { /* 忽略 */ }
+  },
+
+  setSelectedEngine: (name) => set({ selectedEngine: name }),
 
   startParse: async (engine = 'auto') => {
     const doc = get().currentDoc
@@ -216,8 +234,9 @@ export const useStore = create<State>((set, get) => ({
    * 翻译队列：按 CONCURRENCY 并发推进。
    * 只对未翻译、未在飞的段落发请求，结果合并进 translations。
    */
-  translateQueue: async (ids) => {
+  translateQueue: async (ids, engine) => {
     const st = get()
+    const eng = engine !== undefined ? engine : st.selectedEngine
     if (!st.aiReady || !st.currentDoc) return
     const docId = st.currentDoc.id
 
@@ -238,7 +257,7 @@ export const useStore = create<State>((set, get) => ({
         set({ inflight: ni })
       }
       try {
-        const resp = await api.translateSegments(docId, chunk)
+        const resp = await api.translateSegments(docId, chunk, false, eng)
         const translations = { ...get().translations }
         for (const r of resp.results) {
           if (r.text) translations[r.segment_id] = { text: r.text, provider: r.provider }

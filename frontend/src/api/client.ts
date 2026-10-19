@@ -84,6 +84,24 @@ export interface AIConfig {
   api_key_set: boolean
   api_key_masked: string
 }
+export interface EngineDomain { value: string; label: string }
+export interface EngineInfo {
+  name: string
+  label: string
+  enabled: boolean
+  configured: boolean
+  priority: number
+  config: Record<string, string | boolean>
+  domains: EngineDomain[]
+  hint?: string
+}
+export interface EngineTestResult {
+  ok: boolean
+  engine?: string
+  text?: string
+  latency_ms?: number
+  error?: string
+}
 export interface SystemInfo {
   lib_root: string
   db_path: string
@@ -145,16 +163,31 @@ export const api = {
       `/reading/${docId}/parse`, { method: 'POST', body: JSON.stringify({ engine }) }),
   parseProgress: (docId: string) => req<ParseProgress>(`/reading/${docId}/parse/progress`),
   getSegments: (docId: string) => req<SegmentsResp>(`/reading/${docId}/segments`),
-  translateSegments: (docId: string, segmentIds: string[], force = false) =>
-    req<{ results: Array<{ segment_id: string; text: string; provider: string; cached: boolean }>; errors: Array<{ segment_id: string; error: string }> }>(
+  translateSegments: (docId: string, segmentIds: string[], force = false, engine?: string | null) =>
+    req<{
+      results: Array<{ segment_id: string; text: string; provider: string; cached: boolean; latency_ms?: number }>
+      errors: Array<{ segment_id: string; error: string }>
+    }>(
       `/reading/${docId}/translate`,
-      { method: 'POST', body: JSON.stringify({ segment_ids: segmentIds, force }) }),
+      { method: 'POST', body: JSON.stringify({ segment_ids: segmentIds, force, engine: engine || null }) }),
 
   // ---- 配置 ----
   getEngines: () => req<EngineStatus>('/reading/config/engines'),
   getAIConfig: () => req<AIConfig>('/reading/config/ai'),
   saveAIConfig: (c: { base_url?: string; api_key?: string; model?: string; temperature?: number }) =>
     req<{ ok: boolean }>('/reading/config/ai', { method: 'POST', body: JSON.stringify(c) }),
+  getEnginesList: () => req<{ engines: EngineInfo[] }>('/reading/engines'),
+  setEngineOrder: (order: string[]) =>
+    req<{ ok: boolean; order: string[] }>('/reading/engines/order',
+      { method: 'POST', body: JSON.stringify({ order }) }),
+  getEngineConfig: (name: string) => req<Record<string, unknown>>(`/reading/engines/${name}/config`),
+  saveEngineConfig: (name: string, cfg: {
+    enabled?: boolean; appid?: string; appkey?: string
+    domain?: string; endpoint?: string; region?: string
+  }) => req<{ ok: boolean }>(`/reading/engines/${name}/config`,
+      { method: 'POST', body: JSON.stringify(cfg) }),
+  testEngine: (name: string) =>
+    req<EngineTestResult>(`/reading/engines/${name}/test`, { method: 'POST' }),
   getGlossary: () => req<{ glossary: Record<string, string> }>('/reading/config/glossary'),
   saveGlossary: (g: Record<string, string>) =>
     req<{ ok: boolean; count: number }>('/reading/config/glossary', { method: 'POST', body: JSON.stringify({ glossary: g }) }),

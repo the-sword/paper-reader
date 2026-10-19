@@ -16,6 +16,10 @@ type Mode = 'source' | 'bilingual' | 'zh'
 export default function ReadingView() {
   const segments = useStore((s) => s.segments)
   const translations = useStore((s) => s.translations)
+  const engines = useStore((s) => s.engines)
+  const selectedEngine = useStore((s) => s.selectedEngine)
+  const setSelectedEngine = useStore((s) => s.setSelectedEngine)
+  const aiReady = useStore((s) => s.aiReady)
   const [mode, setMode] = useState<Mode>('bilingual')
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -164,6 +168,25 @@ export default function ReadingView() {
         flexDirection: 'column', gap: 14, overflowY: 'auto',
       }}>
         <div>
+          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 6 }}>翻译引擎</div>
+          <select
+            value={selectedEngine ?? ''}
+            onChange={(e) => setSelectedEngine(e.target.value || null)}
+            style={{ width: '100%', fontSize: 11, padding: '4px 6px' }}
+          >
+            <option value="">自动（按优先级）</option>
+            {engines.filter((e) => e.enabled && e.configured).map((e) => (
+              <option key={e.name} value={e.name}>{e.label}</option>
+            ))}
+          </select>
+          {!aiReady && (
+            <div style={{ fontSize: 10, color: '#b91c1c', marginTop: 4, lineHeight: 1.4 }}>
+              未配置可用引擎，点右上角 ⚙ 设置
+            </div>
+          )}
+        </div>
+
+        <div>
           <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 6 }}>显示模式</div>
           {([['source', '仅原文'], ['bilingual', '双语对照'], ['zh', '仅译文']] as const).map(([m, label]) => (
             <div
@@ -198,7 +221,7 @@ export default function ReadingView() {
           onClick={() => {
             const st = useStore.getState()
             const all = translatable.filter((s) => !translations[s.id]).map((s) => s.id)
-            if (all.length) void st.translateQueue(all)
+            if (all.length) void st.translateQueue(all, selectedEngine)
           }}
         >翻译全文</button>
       </div>

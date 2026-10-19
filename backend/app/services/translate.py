@@ -204,8 +204,14 @@ def _clean(s: str) -> str:
 # 缓存与批量
 # ---------------------------------------------------------------------------
 
-def translate_segment(doc_id: str, segment_id: str, force: bool = False) -> dict[str, Any]:
-    """翻译单段并写缓存。命中缓存直接返回。"""
+def translate_segment(doc_id: str, segment_id: str, force: bool = False,
+                      engine: str | None = None) -> dict[str, Any]:
+    """翻译单段并写缓存。
+
+    engine 为空时按全局优先级自动选择并降级。
+    """
+    from . import engines as eng_mod
+
     with db() as conn:
         seg = conn.execute(
             "SELECT * FROM segments WHERE id=? AND document_id=?", (segment_id, doc_id)
@@ -214,22 +220,33 @@ def translate_segment(doc_id: str, segment_id: str, force: bool = False) -> dict
             raise ValueError("段落不存在")
 
         if not force:
-            hit = conn.execute(
-                """SELECT * FROM translations
-                   WHERE segment_id=? AND target_lang='zh-CN'
-                   ORDER BY created_at DESC LIMIT 1""",
-                (segment_id,),
-            ).fetchone()
+            # 有指定引擎时只认该引擎的缓存，否则认任意引擎的结果
+            if engine:
+                hit = conn.execute(
+                    """SELECT * FROM translations
+                       WHERE segment_id=? AND target_lang='zh-CN' AND provider=?
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (segment_id, engine),
+                ).fetchone()
+            else:
+                hit = conn.execute(
+                    """SELECT * FROM translations
+                       WHERE segment_id=? AND target_lang='zh-CN'
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (segment_id,),
+                ).fetchone()
             if hit:
                 return {
                     "segment_id": segment_id, "text": hit["text"],
                     "provider": hit["provider"], "model": hit["model"], "cached": True,
+                    "latency_ms": 0,
                 }
 
     if seg["kind"] not in TRANSLATABLE:
-        return {"segment_id": segment_id, "text": "", "skipped": True, "reason": seg["kind"]}
+        return {"segment_id": segment_id, "text": "", "skipped": True,
+                "reason": seg["kind"]}
 
-    res = translate_text(seg["source"], seg["kind"])
+    res = eng_mod.translate_with_fallback(seg["source"], kind=seg["kind"], preferred=engine)
 
     with db() as conn:
         conn.execute(
@@ -238,13 +255,15 @@ def translate_segment(doc_id: str, segment_id: str, force: bool = False) -> dict
                VALUES (?,?,?,?,?,?,?,?)
                ON CONFLICT(segment_id, provider, target_lang)
                DO UPDATE SET text=excluded.text, created_at=excluded.created_at""",
-            (segment_id, res["provider"], res.get("model"), "zh-CN",
-             res["text"], res.get("token_in"), res.get("token_out"), _now()),
+            (segment_id, res.engine, res.meta.get("model"), "zh-CN",
+             res.text, None, None, _now()),
         )
 
     return {
-        "segment_id": segment_id, "text": res["text"],
-        "provider": res["provider"], "model": res.get("model"), "cached": False,
+        "segment_id": segment_id, "text": res.text,
+        "provider": res.engine, "model": res.meta.get("model"),
+        "cached": False, "latency_ms": res.latency_ms,
+        "meta": res.meta,
     }
 
 
