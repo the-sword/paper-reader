@@ -241,3 +241,24 @@ main::-webkit-scrollbar-thumb {
   opacity: 0.5;
 }
 main::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- 顶栏视图切换 ---------- */
+.seg {
+  font-size: 12px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  border-radius: 0;
+}
+.seg:first-child { border-radius: 6px 0 0 6px; }
+.seg:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+.seg.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* KaTeX 公式颜色跟随主题 */
+.katex { color: var(--fg-strong); }

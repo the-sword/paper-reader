@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS segments (
   section     TEXT,
   kind        TEXT NOT NULL,
   source      TEXT NOT NULL,
+  page        INTEGER NOT NULL DEFAULT 1,
   bbox        TEXT,
   UNIQUE(document_id, idx)
 );
@@ -116,12 +117,22 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """轻量迁移：只做加列，不动已有数据。"""
+    def cols(table: str) -> set[str]:
+        return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+    if "page" not in cols("segments"):
+        conn.execute("ALTER TABLE segments ADD COLUMN page INTEGER NOT NULL DEFAULT 1")
+
+
 def init_db() -> None:
     s = get_settings()
     s.ensure_dirs()
     conn = _connect(s.db_path)
     try:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         conn.commit()
     finally:
         conn.close()

@@ -44,6 +44,46 @@ export interface Annotation {
   created_at: string
   updated_at: string
 }
+export interface Segment {
+  id: string
+  document_id: string
+  idx: number
+  section: string | null
+  kind: 'text' | 'heading' | 'formula' | 'table' | 'figure' | 'caption' | 'reference'
+  source: string
+  page: number
+  bbox: string | null
+  zh: string | null
+  zh_provider: string | null
+  img_path?: string
+  caption?: string
+}
+export interface SegmentsResp {
+  document_id: string
+  count: number
+  cached_translations: number
+  segments: Segment[]
+}
+export interface ParseProgress {
+  state: string
+  progress: number
+  segments?: number
+  error?: string | null
+  task_id?: string
+}
+export interface EngineStatus {
+  mineru_configured: boolean
+  mineru_model: string
+  ai_configured: boolean
+  local_fallback: boolean
+}
+export interface AIConfig {
+  base_url: string
+  model: string
+  temperature: number
+  api_key_set: boolean
+  api_key_masked: string
+}
 export interface SystemInfo {
   lib_root: string
   db_path: string
@@ -98,4 +138,24 @@ export const api = {
     req<Annotation>(`/annotations/${id}`, { method: 'PATCH', body: JSON.stringify(p) }),
   deleteAnnotation: (id: string) => req<{ ok: boolean }>(`/annotations/${id}`, { method: 'DELETE' }),
   exportUrl: (docId: string) => `/api/annotations/export/${docId}${AUTH_TOKEN ? `?token=${AUTH_TOKEN}` : ''}`,
+
+  // ---- 阅读（解析 + 翻译）----
+  startParse: (docId: string, engine: 'auto' | 'mineru' | 'local' = 'auto') =>
+    req<{ engine: string; state: string; segments?: number; task_id?: string }>(
+      `/reading/${docId}/parse`, { method: 'POST', body: JSON.stringify({ engine }) }),
+  parseProgress: (docId: string) => req<ParseProgress>(`/reading/${docId}/parse/progress`),
+  getSegments: (docId: string) => req<SegmentsResp>(`/reading/${docId}/segments`),
+  translateSegments: (docId: string, segmentIds: string[], force = false) =>
+    req<{ results: Array<{ segment_id: string; text: string; provider: string; cached: boolean }>; errors: Array<{ segment_id: string; error: string }> }>(
+      `/reading/${docId}/translate`,
+      { method: 'POST', body: JSON.stringify({ segment_ids: segmentIds, force }) }),
+
+  // ---- 配置 ----
+  getEngines: () => req<EngineStatus>('/reading/config/engines'),
+  getAIConfig: () => req<AIConfig>('/reading/config/ai'),
+  saveAIConfig: (c: { base_url?: string; api_key?: string; model?: string; temperature?: number }) =>
+    req<{ ok: boolean }>('/reading/config/ai', { method: 'POST', body: JSON.stringify(c) }),
+  getGlossary: () => req<{ glossary: Record<string, string> }>('/reading/config/glossary'),
+  saveGlossary: (g: Record<string, string>) =>
+    req<{ ok: boolean; count: number }>('/reading/config/glossary', { method: 'POST', body: JSON.stringify({ glossary: g }) }),
 }

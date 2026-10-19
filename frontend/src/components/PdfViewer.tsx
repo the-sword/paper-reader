@@ -61,7 +61,7 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
     const task = pdfjsLib.getDocument(url)
     task.promise
       .then(async (pdf) => {
-        if (cancelled) return
+        if (cancelled) { void pdf.destroy(); return }
         pdfRef.current = pdf
         setNumPages(pdf.numPages)
         setLoading(false)
@@ -71,15 +71,19 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
           if (!cancelled) onBaseWidth?.(base)
         } catch { /* 忽略 */ }
       })
-      .catch((e) => {
+      .catch((e: unknown) => {
+        // 卸载时主动 destroy 会抛出 "Worker was destroyed"，属于预期行为，不当作错误
+        if (cancelled) return
         console.error('PDF 加载失败', e)
         setLoading(false)
       })
 
     return () => {
       cancelled = true
-      void task.destroy()
+      const pdf = pdfRef.current
       pdfRef.current = null
+      if (pdf) void pdf.destroy()
+      void task.destroy().catch(() => { /* 忽略重复销毁 */ })
     }
   }, [url, onBaseWidth])
 
