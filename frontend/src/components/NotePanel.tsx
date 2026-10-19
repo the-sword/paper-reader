@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useStore } from '../stores/useStore'
 import { api } from '../api/client'
 
-export default function NotePanel({ width = 300 }: { width?: number }) {
+export default function NotePanel({ width = 300, embedded = false }: { width?: number; embedded?: boolean }) {
   const currentDoc = useStore((s) => s.currentDoc)
   const annotations = useStore((s) => s.annotations)
   const removeAnnotation = useStore((s) => s.removeAnnotation)
@@ -12,11 +12,21 @@ export default function NotePanel({ width = 300 }: { width?: number }) {
   const [draft, setDraft] = useState('')
   const [tagInput, setTagInput] = useState('')
 
+  /** 根据 embedded 决定外层容器 */
+  const Shell = ({ children }: { children: React.ReactNode }) =>
+    embedded ? (
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+        {children}
+      </div>
+    ) : (
+      <aside style={{ ...panelStyle, width }}>{children}</aside>
+    )
+
   if (!currentDoc) {
     return (
-      <aside style={{ ...panelStyle, width }}>
+      <Shell>
         <div className="hint" style={{ padding: 16 }}>选择一篇文献开始阅读</div>
-      </aside>
+      </Shell>
     )
   }
 
@@ -42,7 +52,7 @@ export default function NotePanel({ width = 300 }: { width?: number }) {
   }
 
   return (
-    <aside style={{ ...panelStyle, width }}>
+    <Shell>
       <div style={{ padding: 12, borderBottom: '1px solid var(--border)' }}>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, lineHeight: 1.4 }}>
           {currentDoc.title}
@@ -125,7 +135,7 @@ export default function NotePanel({ width = 300 }: { width?: number }) {
             </div>
           ))}
       </div>
-    </aside>
+    </Shell>
   )
 }
 

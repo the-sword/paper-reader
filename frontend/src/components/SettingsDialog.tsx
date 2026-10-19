@@ -11,7 +11,7 @@ const AI_PRESETS = [
   { label: '阿里百炼', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
 ]
 
-type Tab = 'ai' | 'engines' | 'glossary' | 'mineru' | 'system'
+type Tab = 'ai' | 'engines' | 'glossary' | 'mineru' | 'backup' | 'system'
 
 export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>('engines')
@@ -21,6 +21,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
     ['ai', 'AI 接口'],
     ['glossary', '术语表'],
     ['mineru', 'MinerU'],
+    ['backup', '备份'],
     ['system', '系统信息'],
   ]
 
@@ -67,6 +68,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           {tab === 'ai' && <AITab onSaved={() => { /* no-op */ }} />}
           {tab === 'glossary' && <GlossaryTab />}
           {tab === 'mineru' && <MinerUTab />}
+          {tab === 'backup' && <BackupTab />}
           {tab === 'system' && <SystemTab />}
         </div>
       </div>
@@ -612,6 +614,166 @@ function SystemTab() {
           {row('鉴权', info.auth_enabled ? '已启用' : '未启用（仅本地开发）')}
         </>
       ) : <div style={{ fontSize: 12 }}>加载中…</div>}
+    </div>
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+
+function BackupTab() {
+  const [url, setUrl] = useState('')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [fileName, setFileName] = useState('paper-reader-backup.tar.gz')
+  const [includePdfs, setIncludePdfs] = useState(false)
+  const [cfg, setCfg] = useState<{ password_set: boolean; password_masked: string } | null>(null)
+  const [msg, setMsg] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  const [remote, setRemote] = useState<{ exists: boolean; size_bytes?: number; last_modified?: string } | null>(null)
+
+  useEffect(() => {
+    void api.getBackupConfig().then((c) => {
+      setUrl(c.url); setUsername(c.username); setFileName(c.file_name)
+      setCfg({ password_set: c.password_set, password_masked: c.password_masked })
+    }).catch((e) => setMsg(String(e)))
+  }, [])
+
+  const save = async () => {
+    setMsg('')
+    try {
+      await api.saveBackupConfig({
+        url: url.trim(),
+        username: username.trim(),
+        file_name: fileName.trim() || 'paper-reader-backup.tar.gz',
+        ...(password ? { password } : {}),
+      })
+      const c = await api.getBackupConfig()
+      setCfg({ password_set: c.password_set, password_masked: c.password_masked })
+      setPassword('')
+      setMsg('已保存')
+    } catch (e) { setMsg(String(e)) }
+  }
+
+  const test = async () => {
+    setBusy('test'); setMsg('')
+    try {
+      const r = await api.testBackup()
+      setMsg(r.ok ? `✅ ${r.message}` : `❌ ${r.error}`)
+    } catch (e) { setMsg(String(e)) } finally { setBusy(null) }
+  }
+
+  const run = async () => {
+    setBusy('backup'); setMsg('')
+    try {
+      const r = await api.runBackup(includePdfs)
+      setMsg(`✅ 已上传 ${r.size_mb} MB（${r.file_count} 个文件）`)
+      const info = await api.remoteBackupInfo().catch(() => null)
+      if (info) setRemote(info)
+    } catch (e) { setMsg(`❌ ${String(e).replace(/^Error:\s*/, '')}`) } finally { setBusy(null) }
+  }
+
+  const checkRemote = async () => {
+    setBusy('remote'); setMsg('')
+    try {
+      const r = await api.remoteBackupInfo()
+      setRemote(r)
+      setMsg(r.exists ? '远端已有备份' : '远端暂无备份')
+    } catch (e) { setMsg(String(e)) } finally { setBusy(null) }
+  }
+
+  const restore = async () => {
+    if (!confirm('确定从远端恢复？当前数据库会先另存一份再覆盖。')) return
+    setBusy('restore'); setMsg('')
+    try {
+      const r = await api.restoreBackup()
+      setMsg(`✅ 已恢复 ${r.restored_files} 个文件，请重启服务`)
+    } catch (e) { setMsg(`❌ ${String(e).replace(/^Error:\s*/, '')}`) } finally { setBusy(null) }
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 0, lineHeight: 1.6 }}>
+        WebDAV 仅用于备份与换机迁移（不做双向同步）。
+        备份内容包含数据库、标注、翻译缓存与解析产物；PDF 原文可选。
+      </p>
+
+      <div style={{ marginBottom: 10 }}>
+        <label style={labelStyle}>WebDAV 地址</label>
+        <input value={url} onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://dav.jianguoyun.com/dav/paper-reader/"
+          style={inputStyle} />
+      </div>
+
+      <div style={{ marginBottom: 10 }}>
+        <label style={labelStyle}>用户名</label>
+        <input value={username} onChange={(e) => setUsername(e.target.value)}
+          placeholder="邮箱或账号" style={inputStyle} />
+      </div>
+
+      <div style={{ marginBottom: 10 }}>
+        <label style={labelStyle}>
+          密码 {cfg?.password_set && <span>（已设置 {cfg.password_masked}）</span>}
+        </label>
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+          placeholder={cfg?.password_set ? '留空保持不变' : '应用专用密码'} style={inputStyle} />
+      </div>
+
+      <div style={{ marginBottom: 10 }}>
+        <label style={labelStyle}>备份文件名</label>
+        <input value={fileName} onChange={(e) => setFileName(e.target.value)}
+          style={inputStyle} />
+      </div>
+
+      <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <input type="checkbox" checked={includePdfs} style={{ width: 'auto', margin: 0 }}
+          onChange={(e) => setIncludePdfs(e.target.checked)} />
+        <label style={{ fontSize: 12 }}>包含 PDF 原文（体积大，但换机后可完整恢复）</label>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        <button className="btn-primary" style={{ fontSize: 12 }} onClick={() => void save()}>保存配置</button>
+        <button className="btn-ghost" style={{ fontSize: 12 }} disabled={!!busy} onClick={() => void test()}>
+          {busy === 'test' ? '测试中…' : '测试连接'}
+        </button>
+        <button className="btn-ghost" style={{ fontSize: 12 }} disabled={!!busy} onClick={() => void checkRemote()}>
+          {busy === 'remote' ? '查询中…' : '查看远端'}
+        </button>
+      </div>
+
+      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button className="btn-primary" style={{ fontSize: 12 }} disabled={!!busy} onClick={() => void run()}>
+          {busy === 'backup' ? '备份中…' : '立即备份'}
+        </button>
+        <button className="btn-ghost" style={{ fontSize: 12 }} disabled={!!busy} onClick={() => void restore()}>
+          {busy === 'restore' ? '恢复中…' : '从远端恢复'}
+        </button>
+      </div>
+
+      {remote && (
+        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--fg-muted)' }}>
+          远端：{remote.exists
+            ? `${((remote.size_bytes ?? 0) / 1024 / 1024).toFixed(2)} MB · ${remote.last_modified ?? ''}`
+            : '无备份'}
+        </div>
+      )}
+
+      {msg && (
+        <div style={{
+          marginTop: 12, fontSize: 12, padding: '7px 10px', borderRadius: 6,
+          background: msg.startsWith('✅') ? '#22c55e1a' : msg.startsWith('❌') ? '#ef44441a' : 'var(--bg-side)',
+          color: msg.startsWith('❌') ? '#b91c1c' : 'var(--fg)',
+          lineHeight: 1.6, wordBreak: 'break-word',
+        }}>{msg}</div>
+      )}
+
+      <p style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 14, lineHeight: 1.6 }}>
+        坚果云：设置 → 安全 → 添加应用密码，地址填
+        <code style={{ fontSize: 10 }}> https://dav.jianguoyun.com/dav/你的目录/ </code>
+        <br />恢复操作会先把当前数据库另存为
+        <code style={{ fontSize: 10 }}> library.db.before-restore-时间戳 </code>
+        再覆盖。
+      </p>
     </div>
   )
 }

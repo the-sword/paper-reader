@@ -4,7 +4,7 @@ import DocumentList from './components/DocumentList'
 import PdfViewer from './components/PdfViewer'
 import ReadingView from './components/ReadingView'
 import SettingsDialog from './components/SettingsDialog'
-import NotePanel from './components/NotePanel'
+import RightPanel from './components/RightPanel'
 import Resizer from './components/Resizer'
 import { useStore } from './stores/useStore'
 import { api } from './api/client'
@@ -220,8 +220,8 @@ export default function App() {
 
         {showNotes && (
           <>
-            <Resizer side="right" min={220} max={460} onResize={setWNotes} />
-            <NotePanel width={wNotes} />
+            <Resizer side="right" min={240} max={520} onResize={setWNotes} />
+            <RightPanel width={wNotes} />
           </>
         )}
       </div>

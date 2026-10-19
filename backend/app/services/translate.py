@@ -155,45 +155,70 @@ class RateLimitError(RuntimeError):
 
 
 def _post_with_retry(url: str, payload: dict[str, Any], headers: dict[str, str],
-                     max_attempts: int = 5) -> dict[str, Any]:
-    """带指数退避的请求。专门处理中转站的 rpm/tpm 限流。"""
+                     max_attempts: int = 4, timeout: float = 90,
+                     total_budget: float = 240) -> dict[str, Any]:
+    """带指数退避的请求，处理中转站限流与临时故障。
+
+    三个时间约束，避免「无限等待」：
+      - timeout      ：单次请求超时
+      - total_budget ：本次调用（含所有重试与休眠）的总时间上限
+      - max_attempts ：最多尝试次数
+
+    任一触顶即返回明确错误，绝不无限挂起。
+    """
     import time
 
+    start = time.time()
+    deadline = start + total_budget
     last_err = ""
+
     for attempt in range(max_attempts):
+        remaining = deadline - time.time()
+        if remaining < 5:
+            last_err = f"总耗时超过 {total_budget:.0f}s 预算（{last_err}）"
+            break
+
+        per_try = min(timeout, remaining)
         try:
-            with make_client(url, timeout=120) as client:
+            with make_client(url, timeout=per_try) as client:
                 r = client.post(url, json=payload, headers=headers)
         except Exception as e:  # noqa: BLE001  网络层异常也重试
-            last_err = f"{type(e).__name__}: {e}"[:200]
+            last_err = f"{type(e).__name__}: {str(e)[:150]}"
             if attempt < max_attempts - 1:
-                time.sleep(min(2 ** attempt, 20))
+                pause = min(2 ** attempt, 15, max(0, deadline - time.time() - 5))
+                if pause > 0:
+                    time.sleep(pause)
                 continue
-            raise RuntimeError(f"AI 接口连接失败：{last_err}") from e
+            raise RuntimeError(
+                f"AI 接口连接失败（已重试 {attempt + 1} 次，耗时 {time.time() - start:.0f}s）：{last_err}"
+            ) from e
 
         if r.status_code == 200:
             return r.json()
 
-        last_err = f"HTTP {r.status_code}: {r.text[:200]}"
+        last_err = f"HTTP {r.status_code}: {r.text[:180]}"
         if r.status_code not in _RETRYABLE:
             raise RuntimeError(f"AI 接口错误 {last_err}")
 
         if attempt == max_attempts - 1:
             break
 
-        # 尊重服务端 Retry-After，否则指数退避
-        delay = min(2 ** attempt, 20)
+        # 尊重服务端 Retry-After，否则指数退避；都要给总预算留余地
+        delay = min(2 ** attempt, 15)
         ra = r.headers.get("retry-after")
         if ra:
             try:
                 delay = min(float(ra), 30)
             except ValueError:
                 pass
-        time.sleep(delay)
+        delay = min(delay, max(0, deadline - time.time() - 5))
+        if delay > 0:
+            time.sleep(delay)
 
+    elapsed = time.time() - start
     if "429" in last_err:
-        raise RateLimitError(f"接口限流，重试 {max_attempts} 次仍失败：{last_err}")
-    raise RuntimeError(f"AI 接口多次重试仍失败：{last_err}")
+        raise RateLimitError(f"接口限流（重试 {max_attempts} 次，耗时 {elapsed:.0f}s）：{last_err}")
+    raise RuntimeError(f"AI 接口失败（耗时 {elapsed:.0f}s）：{last_err}")
 
 
 def _clean(s: str) -> str:
@@ -279,3 +304,45 @@ def cached_count(doc_id: str) -> int:
             (doc_id,),
         ).fetchone()
     return row["c"] if row else 0
+
+
+def probe_ai(timeout: float = 8) -> dict[str, Any]:
+    """轻量探活：发一个极小请求，判断 AI 端点是否在线。
+
+    用于在执行「总结」等长任务前快速判断，避免用户干等。
+    刻意使用很短的超时，不可达时立刻返回。
+    """
+    import time
+
+    cfg = get_ai_config()
+    if not cfg.get("base_url") or not cfg.get("api_key"):
+        return {"ok": False, "error": "未配置 AI 接口"}
+
+    url = cfg["base_url"].rstrip("/") + "/chat/completions"
+    payload = {
+        "model": cfg.get("model") or "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1,
+    }
+    headers = {
+        "Authorization": f"Bearer {cfg['api_key']}",
+        "Content-Type": "application/json",
+    }
+    t0 = time.time()
+    try:
+        with make_client(url, timeout=timeout) as client:
+            r = client.post(url, json=payload, headers=headers)
+    except Exception as e:  # noqa: BLE001
+        return {
+            "ok": False,
+            "error": f"AI 端点无响应（{timeout:.0f}s 超时）：{type(e).__name__}",
+            "latency_ms": int((time.time() - t0) * 1000),
+        }
+
+    if r.status_code == 200:
+        return {"ok": True, "latency_ms": int((time.time() - t0) * 1000)}
+    return {
+        "ok": False,
+        "error": f"HTTP {r.status_code}: {r.text[:150]}",
+        "latency_ms": int((time.time() - t0) * 1000),
+    }

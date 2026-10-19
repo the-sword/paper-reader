@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../stores/useStore'
-import type { Segment } from '../api/client'
+import { api, type Segment } from '../api/client'
 import RichText, { normalizeOcrSpacing } from './RichText'
 
 type Mode = 'source' | 'bilingual' | 'zh'
@@ -23,6 +23,67 @@ export default function ReadingView() {
   const setSelectedEngine = useStore((s) => s.setSelectedEngine)
   const aiReady = useStore((s) => s.aiReady)
   const [mode, setMode] = useState<Mode>('bilingual')
+
+  // 划词翻译气泡
+  const [term, setTerm] = useState<{
+    x: number; y: number; source: string
+    text?: string; engine?: string; latency?: number; cached?: boolean
+    loading: boolean; error?: string
+  } | null>(null)
+
+  /** 选中文字后弹出气泡 */
+  const onTextSelect = useCallback(() => {
+    const sel = window.getSelection()
+    if (!sel || sel.isCollapsed) return
+    const text = sel.toString().trim()
+    if (!text || text.length < 1) return
+    // 太长的不当划词处理
+    if (text.length > 400) return
+
+    const range = sel.getRangeAt(0)
+    const rect = range.getBoundingClientRect()
+    if (rect.width === 0 && rect.height === 0) return
+
+    setTerm({
+      x: rect.left + rect.width / 2,
+      y: rect.top - 10,
+      source: text,
+      loading: true,
+    })
+
+    void (async () => {
+      try {
+        const r = await api.translateTerm(text, selectedEngine)
+        setTerm((cur) =>
+          cur && cur.source === text
+            ? { ...cur, text: r.text, engine: r.engine, latency: r.latency_ms,
+                cached: r.cached, loading: false }
+            : cur,
+        )
+      } catch (e) {
+        setTerm((cur) =>
+          cur && cur.source === text
+            ? { ...cur, loading: false, error: String(e).replace(/^Error:\s*/, '') }
+            : cur,
+        )
+      }
+    })()
+  }, [selectedEngine])
+
+  /** 点击空白处关闭气泡 */
+  useEffect(() => {
+    if (!term) return
+    const close = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('.term-bubble')) return
+      // 如果有新选区则不关闭
+      const sel = window.getSelection()
+      if (sel && !sel.isCollapsed) return
+      setTerm(null)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [term])
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const itemRefs = useRef<Map<string, HTMLElement>>(new Map())
@@ -145,7 +206,11 @@ export default function ReadingView() {
       )}
 
       {/* 正文 */}
-      <div ref={scrollRef} style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
+      <div
+        ref={scrollRef}
+        onMouseUp={onTextSelect}
+        style={{ flex: 1, minWidth: 0, overflowY: 'auto', position: 'relative' }}
+      >
         <div style={{ maxWidth: 860, margin: '0 auto', padding: '24px 32px 120px' }}>
           {segments.map((seg) => (
             <SegmentBlock
@@ -161,6 +226,39 @@ export default function ReadingView() {
             />
           ))}
         </div>
+
+        {/* 划词翻译气泡 */}
+        {term && (
+          <div
+            className="term-bubble"
+            style={{ left: term.x, top: term.y }}
+            onMouseUp={(e) => e.stopPropagation()}
+          >
+            <div className="term-source">
+              {term.source.length > 70 ? term.source.slice(0, 70) + '…' : term.source}
+            </div>
+            {term.loading && (
+              <div className="term-result loading">翻译中…</div>
+            )}
+            {!term.loading && term.text && (
+              <>
+                <div className="term-result">{term.text}</div>
+                <div className="term-meta">
+                  {term.engine}
+                  {term.latency !== undefined && term.latency > 0 && ` · ${term.latency}ms`}
+                  {term.cached && ' · 缓存'}
+                </div>
+              </>
+            )}
+            {!term.loading && term.error && (
+              <div className="term-result error">{term.error}</div>
+            )}
+            <button
+              className="btn-ghost term-close"
+              onClick={() => setTerm(null)}
+            >✕</button>
+          </div>
+        )}
       </div>
 
       {/* 右侧：模式与进度 */}

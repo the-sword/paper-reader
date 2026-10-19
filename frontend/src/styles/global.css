@@ -286,3 +286,57 @@ main::-webkit-scrollbar-track { background: transparent; }
 .md-table tr:hover td {
   background: var(--bg-active);
 }
+
+/* ---------- 划词翻译气泡 ---------- */
+.term-bubble {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  min-width: 180px;
+  max-width: 380px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+  padding: 9px 12px;
+  z-index: 950;
+  cursor: default;
+}
+
+.term-source {
+  font-size: 11px;
+  color: var(--fg-muted);
+  line-height: 1.4;
+  margin-bottom: 5px;
+  max-height: 40px;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.term-result {
+  font-size: 14px;
+  color: var(--fg-strong);
+  line-height: 1.6;
+  word-break: break-word;
+}
+.term-result.loading { color: var(--fg-muted); font-size: 12px; }
+.term-result.error { color: #b91c1c; font-size: 11px; }
+
+.term-meta {
+  font-size: 10px;
+  color: var(--fg-muted);
+  margin-top: 5px;
+}
+
+.term-close {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  font-size: 10px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  line-height: 1.4;
+}
+.term-close:hover { color: var(--fg); }

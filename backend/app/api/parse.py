@@ -190,6 +190,12 @@ def write_glossary(body: GlossaryReq) -> dict[str, Any]:
     return {"ok": True, "count": len(body.glossary)}
 
 
+@router.get("/config/ai/probe")
+def probe_ai_endpoint() -> dict[str, Any]:
+    """快速探活 AI 端点（8 秒超时）。前端在长任务前调用。"""
+    return translate.probe_ai(timeout=8)
+
+
 @router.get("/config/engines")
 def available_engines() -> dict[str, Any]:
     s = get_settings()

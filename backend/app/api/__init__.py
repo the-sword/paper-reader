@@ -13,6 +13,7 @@ from .annotations import router as annotations_router
 from .documents import router as documents_router
 from .folders import router as folders_router
 from .parse import router as parse_router
+from .phase3 import router as phase3_router
 from .system import router as system_router
 from .tags import router as tags_router
 
@@ -23,3 +24,4 @@ api.include_router(folders_router, prefix="/folders", tags=["folders"])
 api.include_router(tags_router, prefix="/tags", tags=["tags"])
 api.include_router(annotations_router, prefix="/annotations", tags=["annotations"])
 api.include_router(parse_router, prefix="/reading", tags=["reading"])
+api.include_router(phase3_router, prefix="/reading", tags=["phase3"])

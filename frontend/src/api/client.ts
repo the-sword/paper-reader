@@ -102,6 +102,30 @@ export interface EngineTestResult {
   latency_ms?: number
   error?: string
 }
+export interface TermResult {
+  source: string
+  text: string
+  engine: string
+  latency_ms: number
+  cached: boolean
+  meta: Record<string, unknown>
+}
+export interface SummaryKind { value: string; label: string }
+export interface SummaryItem {
+  id: string
+  document_id: string
+  kind: string
+  content: string
+  model: string | null
+  created_at: string
+}
+export interface WebDAVConfig {
+  url: string
+  username: string
+  password_set: boolean
+  password_masked: string
+  file_name: string
+}
 export interface SystemInfo {
   lib_root: string
   db_path: string
@@ -170,6 +194,43 @@ export const api = {
     }>(
       `/reading/${docId}/translate`,
       { method: 'POST', body: JSON.stringify({ segment_ids: segmentIds, force, engine: engine || null }) }),
+
+  // ---- 划词翻译 ----
+  translateTerm: (text: string, engine?: string | null) =>
+    req<TermResult>('/reading/term',
+      { method: 'POST', body: JSON.stringify({ text, engine: engine || null }) }),
+  termStats: () => req<{ memory: number; database: number }>('/reading/term/stats'),
+  clearTermCache: () =>
+    req<{ ok: boolean; cleared: number }>('/reading/term/cache/clear', { method: 'POST' }),
+
+  // ---- AI 总结 ----
+  summaryKinds: () => req<{ kinds: SummaryKind[] }>('/reading/summary/kinds'),
+  createSummary: (docId: string, kind: string, question?: string) =>
+    req<{ id: string; kind: string; content: string; model?: string; input_chars?: number }>(
+      `/reading/summary/${docId}`,
+      { method: 'POST', body: JSON.stringify({ kind, question: question || null }) }),
+  listSummaries: (docId: string) =>
+    req<{ summaries: SummaryItem[] }>(`/reading/summary/${docId}`),
+  deleteSummary: (id: string) =>
+    req<{ ok: boolean }>(`/reading/summary/item/${id}`, { method: 'DELETE' }),
+
+  // ---- 备份 ----
+  getBackupConfig: () => req<WebDAVConfig>('/reading/backup/config'),
+  saveBackupConfig: (c: { url?: string; username?: string; password?: string; file_name?: string }) =>
+    req<{ ok: boolean }>('/reading/backup/config', { method: 'POST', body: JSON.stringify(c) }),
+  testBackup: () =>
+    req<{ ok: boolean; message?: string; error?: string }>('/reading/backup/test', { method: 'POST' }),
+  runBackup: (includePdfs = false) =>
+    req<{ ok: boolean; size_mb: number; file_count: number; uploaded_at: string; endpoint: string }>(
+      '/reading/backup/run',
+      { method: 'POST', body: JSON.stringify({ include_pdfs: includePdfs }) }),
+  remoteBackupInfo: () =>
+    req<{ exists: boolean; size_bytes?: number; last_modified?: string }>('/reading/backup/remote'),
+  restoreBackup: () =>
+    req<{ ok: boolean; restored_files: number }>('/reading/backup/restore', { method: 'POST' }),
+
+  // ---- AI 探活 ----
+  probeAI: () => req<{ ok: boolean; latency_ms?: number; error?: string }>('/reading/config/ai/probe'),
 
   // ---- 配置 ----
   getEngines: () => req<EngineStatus>('/reading/config/engines'),

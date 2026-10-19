@@ -107,6 +107,13 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- 划词翻译缓存（跨文献复用）
+CREATE TABLE IF NOT EXISTS term_cache (
+  key        TEXT PRIMARY KEY,
+  payload    TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 """
 
 
