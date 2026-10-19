@@ -11,6 +11,9 @@
 #   ./deploy.sh --uninstall    卸载服务（保留数据）
 #   ./deploy.sh --token <t>    设置访问口令（推荐 VPS 必须设置）
 #
+#   无 npm 时自动下载 Node 到项目内 .node/（Linux x64/arm64，免 root）；
+#   可选环境变量: NODE_VERSION、NPM_REGISTRY（国内建议 https://registry.npmmirror.com）
+#
 # 设计目标：
 #   1. 单用户轻量：不需要 root、不需要 docker、不需要 nginx/caddy
 #   2. 数据与代码分离：数据在 LIB_ROOT，代码随便删
@@ -21,6 +24,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$ROOT/backend/.venv"
+NODE_DIR="$ROOT/.node"
 SERVICE_NAME="paper-reader"
 LOG_DIR="$HOME/.local/state/paper-reader"
 
@@ -29,6 +33,8 @@ LIB_ROOT="${LIB_ROOT:-$HOME/paper-reader}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8787}"
 AUTH_TOKEN="${AUTH_TOKEN:-}"
+NODE_VERSION="${NODE_VERSION:-22.14.0}"
+NPM_REGISTRY="${NPM_REGISTRY:-}"
 
 DO_BUILD=1
 DRY_RUN=0
@@ -57,20 +63,12 @@ check_env() {
   command -v python3 >/dev/null || die "需要 python3"
   python3 --version | grep -qE '3\.(9|1[0-9])' || warn "建议 Python 3.9+，当前: $(python3 --version)"
 
-  if command -v systemctl >/dev/null; then
-    # 检测是否支持 user 级别的 systemd（部分容器环境不支持）
-    if systemctl --user list-units >/dev/null 2>&1; then
-      HAVE_SYSTEMD_USER=1
-    else
-      HAVE_SYSTEMD_USER=0
-      warn "systemd user 服务不可用（容器环境？），将使用后台进程模式"
-    fi
+  HAVE_SYSTEMD_USER=0
+  if command -v systemctl >/dev/null && systemctl --user list-units >/dev/null 2>&1; then
+    HAVE_SYSTEMD_USER=1
   else
-    HAVE_SYSTEMD_USER=0
-    warn "未检测到 systemd，将使用后台进程模式"
+    warn "systemd user 服务不可用（容器环境？），将使用后台进程模式"
   fi
-
-  command -v npm >/dev/null || { DO_BUILD=0; warn "未检测到 npm，跳过前端构建（需已有 dist/）"; }
 }
 
 # ---------------------------------------------------------------------------
@@ -130,25 +128,98 @@ check_system_python() {
 }
 
 # ---------------------------------------------------------------------------
+# 1.5 无 npm 时自动安装项目内 Node（免 root，仅 Linux x64/arm64）
+# ---------------------------------------------------------------------------
+ensure_node() {
+  command -v npm >/dev/null 2>&1 && return 0
+  if [ -x "$NODE_DIR/bin/npm" ]; then
+    export PATH="$NODE_DIR/bin:$PATH"
+    return 0
+  fi
+  if [ "$(uname -s)" != "Linux" ]; then
+    warn "自动安装 Node 仅支持 Linux，当前系统: $(uname -s)"
+    return 1
+  fi
+  local arch
+  case "$(uname -m)" in
+    x86_64)  arch=x64 ;;
+    aarch64) arch=arm64 ;;
+    *) warn "不支持的 CPU 架构: $(uname -m)，无法自动安装 Node"; return 1 ;;
+  esac
+
+  local tarball="node-v$NODE_VERSION-linux-$arch.tar.gz"
+  local tmp
+  tmp="$(mktemp -d)"
+  info "本机无 npm，下载 Node v$NODE_VERSION 到 $NODE_DIR（下载约 50MB，占盘约 200MB，免 root）"
+  local fetched=""
+  local base
+  for base in "https://registry.npmmirror.com/-/binary/node" "https://nodejs.org/dist"; do
+    info "下载: $base/v$NODE_VERSION/$tarball"
+    if command -v curl >/dev/null 2>&1; then
+      if curl -fSL --retry 2 --connect-timeout 10 -o "$tmp/$tarball" "$base/v$NODE_VERSION/$tarball"; then
+        fetched="$tmp/$tarball"; break
+      fi
+    elif command -v wget >/dev/null 2>&1; then
+      if wget -q --timeout=30 -O "$tmp/$tarball" "$base/v$NODE_VERSION/$tarball"; then
+        fetched="$tmp/$tarball"; break
+      fi
+    else
+      warn "curl/wget 均不可用，无法下载 Node"
+      break
+    fi
+  done
+  if [ -z "$fetched" ]; then
+    rm -rf "$tmp"
+    warn "Node 下载失败（镜像不可达？），可手动安装 Node 后重跑"
+    return 1
+  fi
+
+  mkdir -p "$NODE_DIR"
+  if ! tar -xzf "$fetched" -C "$NODE_DIR" --strip-components=1; then
+    rm -rf "$tmp" "$NODE_DIR"
+    warn "Node 解压失败"
+    return 1
+  fi
+  rm -rf "$tmp"
+  export PATH="$NODE_DIR/bin:$PATH"
+  command -v npm >/dev/null 2>&1 || { warn "Node 安装后 npm 仍不可用"; return 1; }
+  ok "Node 就绪: $(node -v 2>/dev/null || echo "v$NODE_VERSION") @ $NODE_DIR"
+}
+
+# ---------------------------------------------------------------------------
 # 2. 前端构建
 # ---------------------------------------------------------------------------
 build_frontend() {
   local dist="$ROOT/frontend/dist"
 
-  if [ "$DO_BUILD" != "1" ] || ! command -v npm >/dev/null; then
-    # 跳过构建时必须有现成产物，否则服务启动后只会返回「前端尚未构建」
+  # 显式 --no-build：必须有现成产物，否则服务启动后只会返回「前端尚未构建」
+  if [ "$DO_BUILD" != "1" ]; then
     if [ -f "$dist/index.html" ]; then
       info "跳过前端构建，复用已有 dist/"
       return
     fi
-    die "frontend/dist 不存在且本机无 npm，请在有 Node 的机器上执行:
-  cd frontend && VITE_AUTH_TOKEN=<口令> npm run build
-然后把 dist/ 上传到 $ROOT/frontend/dist/，或在本机安装 Node 后重跑"
+    die "已选 --no-build 但 frontend/dist 不存在；去掉 --no-build（无 npm 会自动装 Node），
+或在有 Node 的机器上执行 cd frontend && VITE_AUTH_TOKEN=<口令> npm run build 后上传 dist/"
+  fi
+
+  # 无 npm → 自动装项目内 Node；装不上则退回复用已有 dist
+  if ! command -v npm >/dev/null 2>&1; then
+    if ! ensure_node; then
+      if [ -f "$dist/index.html" ]; then
+        warn "Node 不可用，复用已有 dist/（注意其中是否包含当前口令）"
+        return
+      fi
+      die "本机无 npm 且自动安装 Node 失败。请在有 Node 的机器上构建 dist/ 上传，
+或手动安装 Node: https://nodejs.org/en/download"
+    fi
   fi
 
   info "构建前端"
   if [ ! -d "$ROOT/frontend/node_modules" ]; then
-    (cd "$ROOT/frontend" && npm ci --silent) || (cd "$ROOT/frontend" && npm install --silent) \
+    local reg=()
+    [ -n "$NPM_REGISTRY" ] && reg=(--registry="$NPM_REGISTRY")
+    (cd "$ROOT/frontend" && npm ci --silent "${reg[@]}") \
+      || (cd "$ROOT/frontend" && npm install --silent "${reg[@]}") \
       || die "前端依赖安装失败"
   fi
   # 关键：把访问口令注入前端构建产物。
@@ -357,10 +428,15 @@ PYINNER
     ok "口令已写入 backend/.env"
 
     # 口令变更后必须重新构建前端，否则前端仍持有旧口令（或为空）
-    if [ "$DO_BUILD" = "1" ] && command -v npm >/dev/null; then
-      info "重新构建前端以应用新口令"
-      (cd "$ROOT/frontend" && VITE_AUTH_TOKEN="$AUTH_TOKEN" npm run build >/dev/null 2>&1) \
-        && ok "前端已重新构建" || warn "前端构建失败，页面可能仍用旧口令"
+    if [ "$DO_BUILD" = "1" ]; then
+      command -v npm >/dev/null 2>&1 || ensure_node || true
+      if command -v npm >/dev/null 2>&1; then
+        info "重新构建前端以应用新口令"
+        (cd "$ROOT/frontend" && VITE_AUTH_TOKEN="$AUTH_TOKEN" npm run build >/dev/null 2>&1) \
+          && ok "前端已重新构建" || warn "前端构建失败，页面可能仍用旧口令"
+      else
+        warn "本机无 npm 且 Node 自动安装失败，请手动执行: cd frontend && VITE_AUTH_TOKEN=<口令> npm run build"
+      fi
     else
       warn "跳过前端构建（--no-build），请手动执行: cd frontend && VITE_AUTH_TOKEN=<口令> npm run build"
     fi
