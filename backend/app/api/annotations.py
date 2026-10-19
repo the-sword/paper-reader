@@ -20,6 +20,8 @@ class AnnotationIn(BaseModel):
     comment: str = ""
     segment_id: str | None = None   # 段落流标注时为段落 id
     side: str = "source"            # source | zh
+    start_offset: int | None = None  # 段落内起始字符（部分标注）
+    end_offset: int | None = None    # 段落内结束字符
 
 
 class AnnotationPatch(BaseModel):
@@ -39,6 +41,7 @@ def create_annotation(body: AnnotationIn) -> dict:
             body.document_id, body.page, body.kind, body.rects,
             body.color, body.quote, body.comment,
             segment_id=body.segment_id, side=body.side,
+            start_offset=body.start_offset, end_offset=body.end_offset,
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e

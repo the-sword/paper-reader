@@ -27,7 +27,9 @@ def _validate_rects(rects: list[list[float]]) -> None:
 def create_annotation(doc_id: str, page: int, kind: str, rects: list[list[float]],
                       color: str = "#ffd400", quote: str = "",
                       comment: str = "", segment_id: str | None = None,
-                      side: str = "source") -> dict[str, Any]:
+                      side: str = "source",
+                      start_offset: int | None = None,
+                      end_offset: int | None = None) -> dict[str, Any]:
     """新建标注。
 
     两种锚定方式：
@@ -35,6 +37,8 @@ def create_annotation(doc_id: str, page: int, kind: str, rects: list[list[float]
       - 段落流：传 segment_id（rects 可为空），用于双语阅读视图
 
     side 区分标注的是原文还是译文，便于在侧栏分组显示。
+    start_offset / end_offset 记录段落内的字符范围，
+    用于「只标注选中的几个字」；为空表示整段标注。
     """
     if kind not in VALID_KINDS:
         raise ValueError(f"invalid kind: {kind}")
@@ -55,6 +59,19 @@ def create_annotation(doc_id: str, page: int, kind: str, rects: list[list[float]
             ).fetchone()
         if not row:
             raise ValueError("段落不存在")
+        if start_offset is not None or end_offset is not None:
+            so = 0 if start_offset is None else start_offset
+            eo = end_offset
+            if eo is None or eo <= so:
+                raise ValueError("字符范围无效")
+            # 与段落长度校验，防止越界
+            with db() as conn:
+                seg_len = conn.execute(
+                    "SELECT length(source) n FROM segments WHERE id=?", (segment_id,)
+                ).fetchone()
+            if seg_len and eo > seg_len["n"]:
+                raise ValueError("字符范围超出段落长度")
+            start_offset, end_offset = so, eo
         with db() as conn:
             seg = conn.execute(
                 "SELECT page FROM segments WHERE id=?", (segment_id,)
@@ -67,10 +84,10 @@ def create_annotation(doc_id: str, page: int, kind: str, rects: list[list[float]
         conn.execute(
             """INSERT INTO annotations
                (id, document_id, page, kind, color, rects, quote, comment,
-                segment_id, side, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                segment_id, side, start_offset, end_offset, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (ann_id, doc_id, page, kind, color, json.dumps(rects), quote, comment,
-             segment_id, side, now, now),
+             segment_id, side, start_offset, end_offset, now, now),
         )
         return dict(conn.execute("SELECT * FROM annotations WHERE id=?", (ann_id,)).fetchone())
 

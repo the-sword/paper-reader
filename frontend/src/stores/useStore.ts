@@ -37,7 +37,8 @@ interface State {
   setSearch: (q: string) => void
   refreshAnnotations: (docId: string) => Promise<void>
   addAnnotation: (docId: string, page: number, rects: number[][], quote: string, color: string,
-                  opts?: { segmentId?: string; side?: string; kind?: string }) => Promise<void>
+                  opts?: { segmentId?: string; side?: string; kind?: string
+                           startOffset?: number; endOffset?: number }) => Promise<void>
   removeAnnotation: (id: string) => Promise<void>
   clearError: () => void
   moveDocumentToFolder: (docId: string, folderId: string | null, additive?: boolean) => Promise<void>
@@ -139,6 +140,8 @@ export const useStore = create<State>((set, get) => ({
         rects, color, quote, comment: '',
         segment_id: opts?.segmentId ?? null,
         side: opts?.side ?? 'source',
+        start_offset: opts?.startOffset ?? null,
+        end_offset: opts?.endOffset ?? null,
       })
       await get().refreshAnnotations(docId)
     } catch (e) {

@@ -36,9 +36,58 @@ export default function ReadingView() {
     segmentId: string
     side: 'source' | 'zh'
     truncated?: boolean
+    /** 选区在段落内的字符偏移（相对纯文本） */
+    startOffset?: number
+    endOffset?: number
   } | null>(null)
 
   /** 选中文字后弹出气泡 */
+  /**
+   * 计算选区在「段落纯文本」中的起止偏移。
+   *
+   * 难点：段落里可能混有 KaTeX 渲染的公式（拆成大量 span），
+   * 直接用 textContent 长度会算错。这里以段落的 source/译文原文为基准，
+   * 通过 Range 前缀长度来定位：
+   *   - 把段落容器内的全部内容作为参照，求「从段首到选区起点」的文本长度
+   *   - 公式节点整体按 1 个占位符计（渲染时保留同一占位符参与切分）
+   */
+  const computeOffsets = (
+    range: Range, segEl: HTMLElement, side: 'source' | 'zh',
+  ): { startOffset?: number; endOffset?: number } => {
+    try {
+      // 定位文本容器：原文是 <p>，译文是 .zh-block
+      const container = side === 'zh'
+        ? (segEl.querySelector('.zh-block') as HTMLElement | null)
+        : (segEl.querySelector('p') as HTMLElement | null)
+      if (!container) return {}
+
+      // 起点必须在容器内，否则无从计算
+      if (!container.contains(range.startContainer)) return {}
+
+      const before = document.createRange()
+      before.selectNodeContents(container)
+      before.setEnd(range.startContainer, range.startOffset)
+      const startOffset = before.toString().length
+
+      // 终点可能落在别的段落（跨段被截断的情况）。
+      // 此时标注范围取「起点 → 本段末尾」。
+      if (!container.contains(range.endContainer)) {
+        const total = container.textContent?.length ?? 0
+        return total > startOffset ? { startOffset, endOffset: total } : {}
+      }
+
+      const upto = document.createRange()
+      upto.selectNodeContents(container)
+      upto.setEnd(range.endContainer, range.endOffset)
+      const endOffset = upto.toString().length
+
+      if (endOffset <= startOffset) return {}
+      return { startOffset, endOffset }
+    } catch {
+      return {}
+    }
+  }
+
   /** 向上查找最近的段落容器 */
   const closestSeg = (n: Node | null): HTMLElement | null => {
     let node: Node | null = n
@@ -105,6 +154,9 @@ export default function ReadingView() {
     const side: 'source' | 'zh' = inZh(range.startContainer) || inZh(range.endContainer)
       ? 'zh' : 'source'
 
+    // 计算选区在该段落内的字符偏移，用于「部分标注」
+    const offsets = computeOffsets(range, startSeg, side)
+
     // 只弹气泡，不自动翻译；由用户点「翻译」触发
     setTerm({
       x: rect.left + rect.width / 2,
@@ -114,6 +166,7 @@ export default function ReadingView() {
       segmentId,
       side,
       truncated: crossSeg,
+      ...offsets,
     })
   }, [])
 
@@ -147,6 +200,8 @@ export default function ReadingView() {
       segmentId: t.segmentId,
       side: t.side,
       kind: 'highlight',
+      startOffset: t.startOffset,
+      endOffset: t.endOffset,
     })
     setTerm(null)
     window.getSelection()?.removeAllRanges()
@@ -160,6 +215,8 @@ export default function ReadingView() {
       segmentId: t.segmentId,
       side: t.side,
       kind: 'note',
+      startOffset: t.startOffset,
+      endOffset: t.endOffset,
     })
     setTerm(null)
     window.getSelection()?.removeAllRanges()
@@ -335,11 +392,12 @@ export default function ReadingView() {
   }
 
   const annBySegment = useMemo(() => {
-    const m: Record<string, Array<{ id: string; color: string; side: string; comment: string | null }>> = {}
+    const m: Record<string, Mark[]> = {}
     for (const a of annotations) {
       if (!a.segment_id) continue
       ;(m[a.segment_id] ||= []).push({
         id: a.id, color: a.color, side: a.side, comment: a.comment,
+        start_offset: a.start_offset, end_offset: a.end_offset,
       })
     }
     return m
@@ -653,7 +711,14 @@ export default function ReadingView() {
 
 // ---------------------------------------------------------------------------
 
-interface Mark { id: string; color: string; side: string; comment: string | null }
+interface Mark {
+  id: string
+  color: string
+  side: string
+  comment: string | null
+  start_offset: number | null
+  end_offset: number | null
+}
 
 function SegmentBlock({
   seg, mode, zh, inflight, marks, register,
@@ -816,6 +881,19 @@ function SegmentBlock({
   const srcMarks = marks.filter((m) => m.side === 'source')
   const zhMarks = marks.filter((m) => m.side === 'zh')
 
+  // 只把「有明确字符范围」的标注转成高亮区间；整段标注用左侧色条表示
+  const toRanges = (list: Mark[]) =>
+    list
+      .filter((m) => m.start_offset !== null && m.end_offset !== null)
+      .map((m) => ({
+        start: m.start_offset as number,
+        end: m.end_offset as number,
+        color: m.color,
+      }))
+
+  const srcRanges = toRanges(srcMarks)
+  const zhRanges = toRanges(zhMarks)
+
   return (
     <div
       ref={register}
@@ -833,7 +911,7 @@ function SegmentBlock({
             ['--mark-color' as string]: srcMarks[0]?.color ?? 'transparent',
           }}
         >
-          <RichText text={seg.source} />
+          <RichText text={seg.source} highlights={srcRanges} />
           {srcMarks.length > 0 && (
             <span className="seg-mark-count" title={`原文有 ${srcMarks.length} 条标注`}>
               {srcMarks.length}
@@ -857,7 +935,7 @@ function SegmentBlock({
           }}
         >
           {zh
-            ? <><RichText text={zh} />
+            ? <><RichText text={zh} highlights={zhRanges} />
                 {zhMarks.length > 0 && (
                   <span className="seg-mark-count" title={`译文有 ${zhMarks.length} 条标注`}>
                     {zhMarks.length}

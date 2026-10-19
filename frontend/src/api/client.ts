@@ -44,6 +44,8 @@ export interface Annotation {
   segment_id: string | null
   side: string
   segment_idx: number | null
+  start_offset: number | null
+  end_offset: number | null
   created_at: string
   updated_at: string
 }
@@ -182,6 +184,7 @@ export const api = {
     document_id: string; page?: number; kind: string
     rects?: number[][]; color: string; quote: string; comment: string
     segment_id?: string | null; side?: string
+    start_offset?: number | null; end_offset?: number | null
   }) => req<Annotation>('/annotations', { method: 'POST', body: JSON.stringify(a) }),
   updateAnnotation: (id: string, p: { color?: string; comment?: string }) =>
     req<Annotation>(`/annotations/${id}`, { method: 'PATCH', body: JSON.stringify(p) }),

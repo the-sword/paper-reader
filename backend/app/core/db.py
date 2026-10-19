@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS annotations (
   segment_id  TEXT,
   -- 译文标注时记录其归属，'source' / 'zh'
   side        TEXT DEFAULT 'source',
+  -- 段落内字符偏移（部分标注用）；为空表示整段标注
+  start_offset INTEGER,
+  end_offset   INTEGER,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 );
@@ -142,6 +145,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE annotations ADD COLUMN segment_id TEXT")
     if "side" not in ann_cols:
         conn.execute("ALTER TABLE annotations ADD COLUMN side TEXT DEFAULT 'source'")
+    if "start_offset" not in ann_cols:
+        conn.execute("ALTER TABLE annotations ADD COLUMN start_offset INTEGER")
+    if "end_offset" not in ann_cols:
+        conn.execute("ALTER TABLE annotations ADD COLUMN end_offset INTEGER")
 
 
 def init_db() -> None:
