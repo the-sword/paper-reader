@@ -35,7 +35,15 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     path = request.url.path
-    if path.startswith("/api/system/health") or path.startswith("/assets"):
+    # 静态资源不鉴权：浏览器首次访问拿不到前端里的 token，
+    # 若连 index.html 也拦，页面将永远无法加载（表现为“能连上但打不开”）。
+    # token 的真正作用是防止搜索引擎/扫描器索引到内容，
+    # 数据安全由 API 层鉴权保证。
+    if (
+        path.startswith("/assets")
+        or path.startswith("/api/system/health")
+        or not path.startswith("/api")
+    ):
         return await call_next(request)
 
     provided = request.headers.get("x-auth-token") or request.query_params.get("token")

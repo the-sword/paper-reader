@@ -130,7 +130,15 @@ build_frontend() {
     (cd "$ROOT/frontend" && npm ci --silent) || (cd "$ROOT/frontend" && npm install --silent) \
       || die "前端依赖安装失败"
   fi
-  (cd "$ROOT/frontend" && npm run build >/dev/null) || die "前端构建失败"
+  # 关键：把访问口令注入前端构建产物。
+  # 否则前端 import.meta.env.VITE_AUTH_TOKEN 为空，不发 x-auth-token 头，
+  # 后端返回 401，表现为「能连上但页面空白/加载失败」。
+  local env_args=()
+  if [ -n "$AUTH_TOKEN" ]; then
+    env_args+=("VITE_AUTH_TOKEN=$AUTH_TOKEN")
+    info "已将访问口令注入前端构建产物"
+  fi
+  (cd "$ROOT/frontend" && env "${env_args[@]}" npm run build >/dev/null) || die "前端构建失败"
   [ -f "$dist/index.html" ] || die "构建产物缺失: dist/index.html"
   ok "前端构建完成 ($(du -sh "$dist" | cut -f1))"
 }
@@ -326,9 +334,19 @@ with open(path, "w", encoding="utf-8") as f:
         f.write(f"{k}={v}\n")
 PYINNER
     ok "口令已写入 backend/.env"
+
+    # 口令变更后必须重新构建前端，否则前端仍持有旧口令（或为空）
+    if [ "$DO_BUILD" = "1" ] && command -v npm >/dev/null; then
+      info "重新构建前端以应用新口令"
+      (cd "$ROOT/frontend" && VITE_AUTH_TOKEN="$AUTH_TOKEN" npm run build >/dev/null 2>&1) \
+        && ok "前端已重新构建" || warn "前端构建失败，页面可能仍用旧口令"
+    else
+      warn "跳过前端构建（--no-build），请手动执行: cd frontend && VITE_AUTH_TOKEN=<口令> npm run build"
+    fi
+
     if systemctl --user restart "$SERVICE_NAME" 2>/dev/null; then
       sleep 2
-      if curl -fsS --max-time 5 "http://$HOST:$PORT/api/system/health" >/dev/null 2>&1; then
+      if curl -fsS --max-time 5 -H "x-auth-token: $AUTH_TOKEN" "http://$HOST:$PORT/api/system/health" >/dev/null 2>&1; then
         ok "服务已重启，口令生效"
       else
         warn "服务已重启但未响应，请检查日志"

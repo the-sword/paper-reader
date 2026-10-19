@@ -242,7 +242,18 @@ sudo ufw allow 8787/tcp
 HOST=0.0.0.0 ./deploy.sh
 ```
 
-**注意**：`--token` 会写入 `.env` 并自动重启服务使其生效。容器环境若无 systemd，自动降级为后台进程模式。
+**Token 模式说明**：
+
+`--token` 会写入 `.env`、**重新构建前端**（把口令注入产物）、并重启服务。
+静态资源（HTML/JS/CSS）不鉴权，否则浏览器首次访问拿不到口令，页面永远无法打开；
+数据由 API 层鉴权保护。
+
+```bash
+# 修改口令后必须重新部署前端，否则页面仍用旧口令
+./deploy.sh --token '新口令'
+# 或跳过构建时手动执行
+cd frontend && VITE_AUTH_TOKEN='新口令' npm run build && cd .. && ./deploy.sh --no-build
+```
 
 ---
 
