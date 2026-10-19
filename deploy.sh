@@ -133,11 +133,20 @@ check_system_python() {
 # 2. 前端构建
 # ---------------------------------------------------------------------------
 build_frontend() {
-  [ "$DO_BUILD" = "1" ] || { info "跳过前端构建"; return; }
-  command -v npm >/dev/null || { warn "无 npm，跳过构建"; return; }
+  local dist="$ROOT/frontend/dist"
+
+  if [ "$DO_BUILD" != "1" ] || ! command -v npm >/dev/null; then
+    # 跳过构建时必须有现成产物，否则服务启动后只会返回「前端尚未构建」
+    if [ -f "$dist/index.html" ]; then
+      info "跳过前端构建，复用已有 dist/"
+      return
+    fi
+    die "frontend/dist 不存在且本机无 npm，请在有 Node 的机器上执行:
+  cd frontend && VITE_AUTH_TOKEN=<口令> npm run build
+然后把 dist/ 上传到 $ROOT/frontend/dist/，或在本机安装 Node 后重跑"
+  fi
 
   info "构建前端"
-  local dist="$ROOT/frontend/dist"
   if [ ! -d "$ROOT/frontend/node_modules" ]; then
     (cd "$ROOT/frontend" && npm ci --silent) || (cd "$ROOT/frontend" && npm install --silent) \
       || die "前端依赖安装失败"
