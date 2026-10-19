@@ -13,6 +13,30 @@ import type { Segment } from '../api/client'
 
 type Mode = 'source' | 'bilingual' | 'zh'
 
+
+/**
+ * 规范化 MinerU OCR 产生的「字母间空格」。
+ *
+ * MinerU 的公式识别会把字符间距当成独立字符，输出成：
+ *   {L _ {c l s}}   →  应为 {L _ {cls}}
+ *   \mathsf {W a r p}  →  应为 \mathsf {Warp}
+ *   {D _ {m a x}}   →  应为 {D _ {max}}
+ *
+ * KaTeX 虽然能解析，但会按独立字符排版，间距明显异常。
+ *
+ * 规则：只合并「内容完全由单字母 + 空格构成」的花括号，
+ * 不碰真正的单词、含符号的表达式、嵌套结构。
+ */
+function normalizeOcrSpacing(latex: string): string {
+  return latex.replace(/\{([^{}]*)\}/g, (whole: string, body: string) => {
+    const t = body.trim()
+    if (/^[A-Za-z](?:\s+[A-Za-z])+$/.test(t)) {
+      return '{' + t.replace(/\s+/g, '') + '}'
+    }
+    return whole
+  })
+}
+
 export default function ReadingView() {
   const segments = useStore((s) => s.segments)
   const translations = useStore((s) => s.translations)
@@ -249,15 +273,55 @@ function SegmentBlock({
     const el = srcRef.current
     if (!el) return
     let disposed = false
+
     void import('katex').then((katex) => {
       if (disposed || !el) return
-      try {
-        const latex = seg.source.replace(/^\$\$?|\$\$?$/g, '').trim()
-        katex.default.render(latex, el, { throwOnError: false, displayMode: true })
-      } catch {
+
+      // 剥掉外层 $$...$$ / $...$ / \[...\]，注意首尾可能有换行
+      let latex = seg.source.trim()
+      latex = latex.replace(/^\${1,2}\s*/, '').replace(/\s*\${1,2}$/, '')
+      latex = latex.replace(/^\\\[\s*/, '').replace(/\s*\\\]$/, '')
+      latex = latex.replace(/^\\begin\{equation\*?\}/, '')
+        .replace(/\\end\{equation\*?\}$/, '')
+      latex = latex.trim()
+
+      // MinerU 的 OCR 会把字符间距写成独立字符（如 "W a r p"、"c l s"），
+      // KaTeX 能解析但渲染间距异常，这里把纯字母序列里的空格去掉。
+      // 只处理 \mathrm/\mathsf/\mathit/\text 内部，避免误伤真正的空格语义。
+      latex = normalizeOcrSpacing(latex)
+
+      if (!latex) {
         el.textContent = seg.source
+        return
       }
-    }).catch(() => { if (el) el.textContent = seg.source })
+
+      try {
+        katex.default.render(latex, el, {
+          throwOnError: false,
+          displayMode: true,
+          strict: false,
+          // 出错时把错误的源码标红，便于发现未被支持的宏
+          errorColor: '#dc2626',
+          trust: false,
+          macros: {
+            // MinerU 常见写法：\mathsf 里带空格，KaTeX 支持
+            '\\mathop': '\\mathop',
+          },
+        })
+      } catch (e) {
+        // 渲染失败时退化为等宽文本，至少能看清原始 LaTeX
+        el.textContent = ''
+        const pre = document.createElement('pre')
+        pre.textContent = latex
+        pre.style.cssText = 'font-size:12px;color:var(--fg-muted);white-space:pre-wrap;margin:0'
+        el.appendChild(pre)
+        console.warn('公式渲染失败:', e, latex.slice(0, 80))
+      }
+    }).catch((e) => {
+      if (el) el.textContent = seg.source
+      console.warn('KaTeX 加载失败:', e)
+    })
+
     return () => { disposed = true }
   }, [seg.source, seg.kind])
 
