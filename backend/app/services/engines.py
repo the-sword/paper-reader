@@ -135,11 +135,43 @@ def set_engine_order(order: list[str]) -> None:
 # 百度领域翻译
 # ---------------------------------------------------------------------------
 
+# 百度错误码 → 可操作的中文提示
+_BAIDU_ERRORS = {
+    "52001": "请求超时，请重试",
+    "52002": "百度系统错误，请重试",
+    "52003": "未授权用户：请检查 AppID 是否为「领域翻译」产品、服务是否已开通",
+    "54000": "必填参数为空：请检查 AppID 和密钥是否填写完整",
+    "54001": "签名错误或领域产品未开通。常见原因："
+             "① 未在控制台单独开通「领域翻译」产品；"
+             "② 密钥有误或多带空格；"
+             "③ 请求了不支持的语言方向",
+    "54003": "访问频率受限：请降低调用频率（免费版 QPS 较低）",
+    "54004": "账户余额不足：百度翻译免费额度已用完，请到控制台充值或等待月度重置",
+    "54005": "长 query 请求频繁：请降低长文本的请求频率",
+    "58000": "客户端 IP 非法：请检查是否在开放平台配置了 IP 白名单",
+    "58001": "译文语言方向不支持：请检查 from/to 参数",
+    "58002": "服务当前已关闭：请在控制台确认服务状态",
+    "90107": "认证未通过或未生效：请在控制台完成实名认证",
+}
+
+# 这些错误值得重试（临时性问题）
+_BAIDU_RETRYABLE = {"52001", "52002", "54003", "54005"}
+
+
+def _baidu_error_message(code: str, raw: str) -> str:
+    hint = _BAIDU_ERRORS.get(code)
+    if hint:
+        return f"百度翻译 {code}：{hint}"
+    return f"百度翻译错误 {code}: {raw}"
+
+
 class BaiduEngine:
     name = "baidu"
     label = "百度领域翻译"
-    # 垂直领域端点；通用版是 /vip/translate
+    # 领域翻译端点
     FIELD_URL = "https://fanyi-api.baidu.com/api/trans/vip/fieldtranslate"
+    # 通用翻译端点（领域产品未开通时的兜底）
+    GENERAL_URL = "https://fanyi-api.baidu.com/api/trans/vip/translate"
 
     # 百度返回的语言代码
     LANGS = {"zh": "zh", "en": "en", "ja": "jp", "ko": "kor", "fr": "fra", "de": "de"}
@@ -170,45 +202,76 @@ class BaiduEngine:
         if not appid or not appkey:
             raise EngineError("百度翻译未配置 AppID/密钥", retryable=False)
 
+        domain = (c.get("domain") or "academic").strip()
+        t0 = time.time()
+
+        # 先按配置的领域走「领域翻译」；若因 domain 参数报 54001
+        # （常见于未单独开通领域翻译产品），自动退到通用翻译重试一次。
+        attempts: list[tuple[str, str | None]] = [(self.FIELD_URL, domain)]
+        if domain != "general":
+            attempts.append((self.GENERAL_URL, None))
+
+        last_err: EngineError | None = None
+        for url, dom in attempts:
+            body, err = self._request(url, text, src, dst, appid, appkey, dom)
+            if err is None and body is not None:
+                lines = [item.get("dst", "") for item in body.get("trans_result", [])]
+                if not lines:
+                    raise EngineError("百度翻译返回为空")
+                return EngineResult(
+                    text="\n".join(lines),
+                    engine=self.name,
+                    latency_ms=int((time.time() - t0) * 1000),
+                    meta={
+                        "domain": dom or "general",
+                        "endpoint": "field" if dom else "general",
+                    },
+                )
+            last_err = err
+            # 只有「签名/领域未开通」这类错误才值得换端点重试
+            if not (err and ("54001" in str(err) or "52003" in str(err))):
+                break
+
+        raise last_err or EngineError("百度翻译失败")
+
+    def _request(self, url: str, text: str, src: str, dst: str,
+                 appid: str, appkey: str, domain: str | None):
+        """发一次请求。返回 (body, None) 或 (None, EngineError)。"""
         salt = str(random.randint(32768, 65536))
-        params = {
+        # 签名只用 appid + q + salt + key，domain 不参与
+        sign = self._sign(appid, text, salt, appkey)
+        params: dict[str, Any] = {
             "q": text,
             "from": self.LANGS.get(src, src),
             "to": self.LANGS.get(dst, dst),
             "appid": appid,
             "salt": salt,
-            "domain": c.get("domain") or "academic",
-            "sign": self._sign(appid, text, salt, appkey),
+            "sign": sign,
         }
+        if domain:
+            params["domain"] = domain
 
-        t0 = time.time()
         try:
-            with make_client(self.FIELD_URL, timeout=30) as client:
-                r = client.get(self.FIELD_URL, params=params)
+            with make_client(url, timeout=30) as client:
+                r = client.get(url, params=params)
         except Exception as e:  # noqa: BLE001
-            raise EngineError(f"百度翻译连接失败：{e}") from e
+            return None, EngineError(f"百度翻译连接失败：{e}")
 
         if r.status_code != 200:
-            raise EngineError(f"百度翻译 HTTP {r.status_code}: {r.text[:200]}")
+            return None, EngineError(f"百度翻译 HTTP {r.status_code}: {r.text[:200]}")
 
-        body = r.json()
+        try:
+            body = r.json()
+        except Exception:
+            return None, EngineError(f"百度翻译返回非 JSON：{r.text[:120]}")
+
         if body.get("error_code"):
             code = str(body["error_code"])
-            msg = body.get("error_msg", "")
-            # 54001 签名错误 / 54003 限流 / 52001 超时
-            retryable = code not in ("54001", "52003")
-            raise EngineError(f"百度翻译错误 {code}: {msg}", retryable=retryable)
-
-        lines = [item.get("dst", "") for item in body.get("trans_result", [])]
-        if not lines:
-            raise EngineError("百度翻译返回为空")
-
-        return EngineResult(
-            text="\n".join(lines),
-            engine=self.name,
-            latency_ms=int((time.time() - t0) * 1000),
-            meta={"domain": params["domain"]},
-        )
+            return None, EngineError(
+                _baidu_error_message(code, body.get("error_msg", "")),
+                retryable=code in _BAIDU_RETRYABLE,
+            )
+        return body, None
 
 
 # ---------------------------------------------------------------------------
