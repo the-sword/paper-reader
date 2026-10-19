@@ -45,6 +45,8 @@ export default function App() {
   const [showNotes, setShowNotes] = useState(true)
   const [showSettings, setShowSettings] = useState(false)
   const [showArxiv, setShowArxiv] = useState(false)
+  /** 视图偏好是否已加载，避免用默认值覆盖用户选择 */
+  const [viewPrefLoaded, setViewPrefLoaded] = useState(false)
   const [view, setView] = useState<ViewMode>('pdf')
 
   const mainRef = useRef<HTMLElement>(null)
@@ -75,12 +77,39 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 切换文献时按已有段落自动选择视图
+  // 启动时加载上次使用的视图
+  useEffect(() => {
+    void api.getPrefs().then(({ values }) => {
+      if (values.view_mode === 'reading' || values.view_mode === 'pdf') {
+        setView(values.view_mode)
+      }
+      setViewPrefLoaded(true)
+    }).catch(() => setViewPrefLoaded(true))
+  }, [])
+
+  // 切换文献：只重置缩放，不再强制切换视图
   useEffect(() => {
     if (!currentDoc) return
     setBaseWidth(null)
-    setView(segments.length ? 'reading' : 'pdf')
-  }, [currentDoc, segments.length])
+  }, [currentDoc])
+
+  // 若当前是「双语阅读」但该文献还没解析，自动回退到 PDF
+  // （只在确实没有段落时回退，解析完成后仍停留在当前视图）
+  useEffect(() => {
+    if (!viewPrefLoaded || !currentDoc) return
+    if (view === 'reading' && parseState !== 'idle' && segments.length === 0
+        && parseState !== 'running' && parseState !== 'pending') {
+      setView('pdf')
+    }
+  }, [view, viewPrefLoaded, currentDoc, segments.length, parseState])
+
+  /** 切换视图并记住选择 */
+  const switchView = (v: ViewMode) => {
+    setView(v)
+    if (viewPrefLoaded) {
+      void api.savePrefs({ view_mode: v }).catch(() => {})
+    }
+  }
 
   const lastFitFor = useRef<string | null>(null)
   useEffect(() => {
@@ -139,11 +168,11 @@ export default function App() {
           <div style={{ display: 'flex', gap: 2, marginLeft: 8, flexShrink: 0 }}>
             <button
               className={`seg ${view === 'pdf' ? 'active' : ''}`}
-              onClick={() => setView('pdf')}
+              onClick={() => switchView('pdf')}
             >PDF</button>
             <button
               className={`seg ${view === 'reading' ? 'active' : ''}`}
-              onClick={() => setView('reading')}
+              onClick={() => switchView('reading')}
               title={hasSegments ? '段落流双语阅读' : '先解析全文'}
             >双语阅读</button>
           </div>

@@ -19,6 +19,7 @@ DEFAULTS: dict[str, Any] = {
     "translate_mode": "auto",     # auto | manual
     "reading_mode": "bilingual",  # source | bilingual | zh
     "selected_engine": "",        # 空表示自动
+    "view_mode": "pdf",           # pdf | reading —— 上次使用的视图
 }
 
 
