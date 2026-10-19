@@ -290,7 +290,10 @@ main::-webkit-scrollbar-track { background: transparent; }
 /* ---------- 划词翻译气泡 ---------- */
 .term-bubble {
   position: fixed;
+  /* 默认显示在选区上方；上方空间不足时加 .below 翻到下方 */
   transform: translate(-50%, -100%);
+  max-height: 60vh;
+  overflow-y: auto;
   min-width: 180px;
   max-width: 380px;
   background: var(--bg-card);
@@ -300,6 +303,10 @@ main::-webkit-scrollbar-track { background: transparent; }
   padding: 9px 12px;
   z-index: 950;
   cursor: default;
+}
+
+.term-bubble.below {
+  transform: translate(-50%, 0);
 }
 
 .term-source {

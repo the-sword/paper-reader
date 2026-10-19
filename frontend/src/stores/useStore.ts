@@ -75,7 +75,7 @@ export const useStore = create<State>((set, get) => ({
   translations: {},
   inflight: new Set<string>(),
   aiReady: false,
-  parseState: 'pending',
+  parseState: 'idle',   // idle=未解析 | pending/running=进行中 | done | failed
   parseProgress: 0,
   engines: [],
   selectedEngine: null,
@@ -101,7 +101,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   openDocument: async (id) => {
-    set({ loading: true, error: null, segments: [], translations: {} })
+    set({ loading: true, error: null, segments: [], translations: {}, parseState: 'idle', parseProgress: 0 })
     try {
       const currentDoc = await api.getDocument(id)
       const annotations = await api.listAnnotations(id)
@@ -217,7 +217,7 @@ export const useStore = create<State>((set, get) => ({
       set({
         segments: resp.segments,
         translations,
-        parseState: resp.count > 0 ? 'done' : 'pending',
+        parseState: resp.count > 0 ? 'done' : 'idle',
         parseProgress: resp.count > 0 ? 100 : 0,
       })
       await get().refreshAIConfig()

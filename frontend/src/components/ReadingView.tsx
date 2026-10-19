@@ -39,6 +39,8 @@ export default function ReadingView() {
     /** 选区在段落内的字符偏移（相对纯文本） */
     startOffset?: number
     endOffset?: number
+    /** 气泡是否显示在选区下方（上方空间不足时翻转） */
+    below?: boolean
   } | null>(null)
 
   /** 选中文字后弹出气泡 */
@@ -146,7 +148,7 @@ export default function ReadingView() {
     const rects = range.getClientRects()
     const rect = rects.length ? rects[0] : (() => {
       const r = startSeg.getBoundingClientRect()
-      return { left: r.left, top: r.top, width: 0, height: 0 }
+      return { left: r.left, top: r.top, width: 0, height: 0, bottom: r.top }
     })()
     if (rect.width === 0 && rect.height === 0 && !crossSeg) return
 
@@ -157,10 +159,30 @@ export default function ReadingView() {
     // 计算选区在该段落内的字符偏移，用于「部分标注」
     const offsets = computeOffsets(range, startSeg, side)
 
+    // 计算气泡位置：上方空间不足时翻到选区下方，并限制在视口内
+    // 气泡高度按最大 180px 估算（含译文与按钮）
+    const EST_H = 190
+    const EST_W = 400
+    const MARGIN = 12
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+
+    const spaceAbove = rect.top
+    const placeBelow = spaceAbove < EST_H + MARGIN
+
+    const rawY = placeBelow ? rect.bottom + 10 : rect.top - 10
+    // 纵向夹紧，避免超出上下边界
+    const y = Math.max(MARGIN, Math.min(vh - MARGIN, rawY))
+
+    // 横向夹紧：气泡是 translate(-50%)，所以左右各留半宽
+    const rawX = rect.left + rect.width / 2
+    const x = Math.max(EST_W / 2 + MARGIN, Math.min(vw - EST_W / 2 - MARGIN, rawX))
+
     // 只弹气泡，不自动翻译；由用户点「翻译」触发
     setTerm({
-      x: rect.left + rect.width / 2,
-      y: rect.top - 10,
+      x,
+      y,
+      below: placeBelow,
       source: text,
       loading: false,
       segmentId,
@@ -527,7 +549,7 @@ export default function ReadingView() {
         {/* 划词翻译气泡 */}
         {term && (
           <div
-            className="term-bubble"
+            className={`term-bubble${term.below ? ' below' : ''}`}
             style={{ left: term.x, top: term.y }}
             onMouseUp={(e) => e.stopPropagation()}
           >

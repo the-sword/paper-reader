@@ -117,7 +117,7 @@ export default function App() {
   }, [error, clearError])
 
   const hasSegments = segments.length > 0
-  const parsing = parseState === 'running' || parseState === 'pending'
+  const parsing = parseState === 'running' || parseState === 'pending' || parseState === 'queued'
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflow: 'hidden' }}>
@@ -151,7 +151,7 @@ export default function App() {
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           {/* 解析按钮 */}
-          {currentDoc && view === 'reading' && !hasSegments && !parsing && (
+          {currentDoc && !hasSegments && !parsing && (
             <button className="btn-primary" style={{ fontSize: 12 }} onClick={() => void startParse('auto')}>
               解析全文
             </button>
