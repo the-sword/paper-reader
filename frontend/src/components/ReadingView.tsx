@@ -183,17 +183,33 @@ export default function ReadingView() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const itemRefs = useRef<Map<string, HTMLElement>>(new Map())
   const visibleRef = useRef<Set<string>>(new Set())
+  /** 可见段落变化时触发重渲染（用于按钮计数） */
+  const [visibleTick, setVisibleTick] = useState(0)
+  /** 翻译模式：auto=滚动自动翻译（默认），manual=仅手动 */
+  const [autoTranslate, setAutoTranslate] = useState(true)
 
   // ---- 可见性观察：进入视口的段落排队翻译 ----
   //
-  // 关键点：IntersectionObserver 的回调里必须拿到「最新」的 store 状态，
-  // 因此通过 ref 转发到最新的 flush 函数，避免闭包捕获旧值。
+  // 可见段落追踪 + 渐进翻译。
+  //
+  // 行为由「翻译模式」开关决定：
+  //   auto    （默认）：滚动到视口内的段落自动排队翻译（原行为）
+  //   manual          ：只记录可见段落，等用户点「翻译当前可见」
+  //
+  // IntersectionObserver 的回调里必须拿到最新的开关与 store 状态，
+  // 因此通过 ref 转发，避免闭包捕获旧值。
   const flushRef = useRef<() => void>(() => {})
   const observerRef = useRef<IntersectionObserver | null>(null)
   const pendingTimer = useRef<number | null>(null)
+  const autoModeRef = useRef(true)
+
+  useEffect(() => {
+    autoModeRef.current = autoTranslate
+  }, [autoTranslate])
 
   /** 把当前可见 + 未翻译 + 未在飞的段落推入翻译队列 */
-  const flushVisible = useCallback(() => {
+  const flushVisible = useCallback((force = false) => {
+    if (!force && !autoModeRef.current) return
     const st = useStore.getState()
     if (!st.aiReady || !st.currentDoc) return
     const todo: string[] = []
@@ -203,9 +219,8 @@ export default function ReadingView() {
     if (todo.length) void st.translateQueue(todo)
   }, [])
 
-  // 始终指向最新实现
   useEffect(() => {
-    flushRef.current = flushVisible
+    flushRef.current = () => flushVisible()
   }, [flushVisible])
 
   /** 抖动合并：一次滚动里多个元素进出，只调度一次 */
@@ -214,11 +229,18 @@ export default function ReadingView() {
     pendingTimer.current = window.setTimeout(() => {
       pendingTimer.current = null
       flushRef.current()
-    }, 120)
+    }, 150)
   }, [])
 
-  // 创建观察者（只依赖容器，不依赖 segments）
+  // 创建观察者。
+  //
+  // 依赖 segments：首次渲染时滚动容器可能尚未挂载（ref 为 null），
+  // 此时 root 会退化为整个视口，导致可见段落集合始终为空。
+  // 放到 segments 变化之后重建，可确保容器已就绪。
   useEffect(() => {
+    const root = scrollRef.current
+    if (!root) return
+
     visibleRef.current.clear()
     const io = new IntersectionObserver(
       (entries) => {
@@ -228,11 +250,16 @@ export default function ReadingView() {
           if (entry.isIntersecting) visibleRef.current.add(id)
           else visibleRef.current.delete(id)
         }
-        scheduleFlush()
+        setVisibleTick((t) => t + 1)
+        scheduleFlush()   // 自动模式下会真正触发翻译
       },
-      { root: scrollRef.current, rootMargin: '300px 0px 900px 0px', threshold: 0 },
+      { root, rootMargin: '300px 0px 900px 0px', threshold: 0 },
     )
     observerRef.current = io
+
+    // 立即观察所有已渲染段落
+    for (const el of itemRefs.current.values()) io.observe(el)
+
     return () => {
       io.disconnect()
       if (pendingTimer.current !== null) {
@@ -240,17 +267,9 @@ export default function ReadingView() {
         pendingTimer.current = null
       }
     }
-  }, [scheduleFlush])
-
-  // 段落集合变化时重新挂观察目标
-  useEffect(() => {
-    const io = observerRef.current
-    if (!io) return
-    for (const el of itemRefs.current.values()) {
-      io.observe(el)
-    }
-    scheduleFlush()
   }, [segments, mode, scheduleFlush])
+
+
 
   // 按段落聚合标注，传给段落渲染
   /** 重翻流程状态 */
@@ -298,6 +317,17 @@ export default function ReadingView() {
     }
     return m
   }, [annotations])
+
+  // 可见段落中待翻译的数量（visibleTick 变化时重算）
+  const visiblePending = useMemo(() => {
+    void visibleTick
+    let n = 0
+    for (const id of visibleRef.current) {
+      if (!translations[id]) n++
+    }
+    return n
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleTick, translations])
 
   // ---- 大纲 ----
   const outline = useMemo(
@@ -501,6 +531,28 @@ export default function ReadingView() {
         </div>
 
         <div>
+          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 6 }}>翻译方式</div>
+          <div style={{ display: 'flex', gap: 2, marginBottom: 10 }}>
+            {([
+              [true, '自动'],
+              [false, '手动'],
+            ] as Array<[boolean, string]>).map(([v, label]) => (
+              <button
+                key={label}
+                onClick={() => setAutoTranslate(v)}
+                title={v
+                  ? '滚动到视口内的段落会自动翻译'
+                  : '只在你点击按钮时翻译'}
+                style={{
+                  flex: 1, fontSize: 10, padding: '3px 0', cursor: 'pointer',
+                  border: `1px solid ${autoTranslate === v ? 'var(--accent)' : 'var(--border)'}`,
+                  background: autoTranslate === v ? 'var(--accent)' : 'transparent',
+                  color: autoTranslate === v ? '#fff' : 'var(--fg)',
+                }}
+              >{label}</button>
+            ))}
+          </div>
+
           <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 4 }}>翻译进度</div>
           <div style={{ height: 5, background: 'var(--border)', borderRadius: 3 }}>
             <div style={{
@@ -512,6 +564,14 @@ export default function ReadingView() {
             {done} / {translatable.length}
           </div>
         </div>
+
+        <button
+          className="btn-ghost"
+          style={{ fontSize: 11 }}
+          disabled={visiblePending === 0}
+          title="只翻译当前屏幕内可见且未翻译的段落"
+          onClick={() => flushVisible(true)}
+        >翻译当前可见{visiblePending > 0 ? ` (${visiblePending})` : ''}</button>
 
         <button
           className="btn-ghost"
@@ -530,6 +590,12 @@ export default function ReadingView() {
           title="清除本篇译文缓存并重新翻译（标注不受影响）"
           onClick={() => void doRetranslate()}
         >{retranslating ? '重翻中…' : '清除译文缓存并重翻'}</button>
+
+        {!autoTranslate && (
+          <div style={{ fontSize: 10, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+            手动模式：滚动不会自动翻译
+          </div>
+        )}
 
         {retransMsg && (
           <div style={{
