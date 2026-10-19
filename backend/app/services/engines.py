@@ -281,43 +281,100 @@ class BaiduEngine:
 class GoogleEngine:
     name = "google"
     label = "Google 翻译（免费端点）"
-    URL = "https://translate.googleapis.com/translate_a/single"
+
+    # 备用端点列表：按顺序尝试，任一成功即返回
+    #   1) gtx（标准免费接口）—— 常因共享出口 IP 被 429
+    #   2) clients5 dict-chrome-ex —— 浏览器扩展用的轻量接口，限流宽松得多
+    ENDPOINTS = [
+        {
+            "url": "https://translate.googleapis.com/translate_a/single",
+            "params": {"client": "gtx", "dt": "t"},
+            "style": "gtx",
+        },
+        {
+            "url": "https://clients5.google.com/translate_a/t",
+            "params": {"client": "dict-chrome-ex"},
+            "style": "clients5",
+        },
+    ]
+
+    UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
 
     def configured(self) -> bool:
-        # 无需 key，默认认为可用（可在设置里禁用）
+        # 无需 key，默认可用（可在设置里禁用）
         return True
 
     def translate(self, text: str, src: str = "en", dst: str = "zh") -> EngineResult:
         c = get_engine_config(self.name)
-        url = c.get("endpoint") or self.URL
-        params = {
-            "client": "gtx",
-            "sl": "auto",
-            "tl": "zh-CN" if dst == "zh" else dst,
-            "dt": "t",
-            "q": text,
-        }
+        # 单个端点时可直接覆盖
+        endpoints = self.ENDPOINTS
+        if c.get("endpoint"):
+            endpoints = [{"url": c["endpoint"], "params": {"client": "gtx", "dt": "t"},
+                          "style": "gtx"}]
+
+        target = "zh-CN" if dst == "zh" else dst
+        # clients5 对换行不友好，统一压成空格
+        q = re.sub(r"\s*\n\s*", " ", text).strip()
+
         t0 = time.time()
-        try:
-            with make_client(url, timeout=30) as client:
-                r = client.get(url, params=params)
-        except Exception as e:  # noqa: BLE001
-            raise EngineError(f"Google 翻译连接失败：{e}") from e
+        errors: list[str] = []
+        for ep in endpoints:
+            params = {**ep["params"], "sl": "auto", "tl": target, "q": q}
+            try:
+                with make_client(ep["url"], timeout=25) as client:
+                    r = client.get(ep["url"], params=params, headers={"User-Agent": self.UA})
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{ep['url'].split('/')[2]}: {type(e).__name__}")
+                continue
 
-        if r.status_code != 200:
-            raise EngineError(f"Google 翻译 HTTP {r.status_code}")
+            if r.status_code == 429:
+                errors.append(f"{ep['url'].split('/')[2]}: HTTP 429 限流")
+                continue
+            if r.status_code != 200:
+                errors.append(f"{ep['url'].split('/')[2]}: HTTP {r.status_code}")
+                continue
 
-        try:
-            data = r.json()
-            parts = [seg[0] for seg in data[0] if seg and seg[0]]
-            out = "".join(parts)
-        except Exception as e:  # noqa: BLE001
-            raise EngineError(f"Google 翻译解析失败：{e}") from e
+            try:
+                out = self._parse(r, ep["style"])
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{ep['url'].split('/')[2]}: 解析失败 {e}")
+                continue
 
-        if not out.strip():
-            raise EngineError("Google 翻译返回为空")
-        return EngineResult(text=out, engine=self.name,
-                            latency_ms=int((time.time() - t0) * 1000))
+            if out.strip():
+                meta = {"endpoint": ep["url"].split("/")[2]}
+                # clients5 用的是无上下文的轻量模型，短标题类文本容易误译
+                if ep["style"] == "clients5" and len(q) < 60:
+                    meta["quality_note"] = "短文本可能误译，建议用 AI 引擎"
+                return EngineResult(
+                    text=out, engine=self.name,
+                    latency_ms=int((time.time() - t0) * 1000),
+                    meta=meta,
+                )
+            errors.append(f"{ep['url'].split('/')[2]}: 返回为空")
+
+        raise EngineError("Google 翻译全部端点失败：" + "；".join(errors))
+
+    @staticmethod
+    def _parse(resp, style: str) -> str:
+        data = resp.json()
+        if style == "gtx":
+            # [["译文","原文",...], ...]
+            parts = []
+            for seg in data[0]:
+                if seg and seg[0]:
+                    parts.append(seg[0])
+            return "".join(parts)
+        # clients5: [["译文","en"]] 或 "译文"
+        if isinstance(data, str):
+            return data
+        if isinstance(data, list) and data:
+            first = data[0]
+            if isinstance(first, list) and first:
+                return str(first[0])
+            if isinstance(first, str):
+                return first
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +548,8 @@ _ENGINE_HINTS = {
     "tencent": "推荐。腾讯云控制台开通机器翻译，获取 SecretId/SecretKey，"
                "每月 500 万字符免费（额度最大）",
     "volcano": "火山引擎控制台开通机器翻译，获取 AK/SK，每月 200 万字符免费",
-    "google": "无需配置。非官方端点，可能被限流或需要代理，仅作备用",
+    "google": "无需配置。非官方端点：主端点常被限流，会自动切到备用端点。"
+              "备用端点对短标题易误译，建议仅用于正文，重要内容交给 AI 或国内引擎",
     "bing": "无需配置。非官方端点，token 可能失效，仅作备用",
     "deepl": "DeepL 官网申请 API Key，免费版每月 50 万字符，服务器在境外",
     "ai": "质量最好但较慢（单段约 5-10 秒）。适合全文精翻，不适合划词",
