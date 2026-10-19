@@ -1,0 +1,243 @@
+:root {
+  --bg: #ffffff;
+  --bg-side: #f8f9fb;
+  --bg-card: #ffffff;
+  --bg-active: #eef2ff;
+  --bg-canvas: #e8eaed;
+  --fg: #374151;
+  --fg-strong: #111827;
+  --fg-muted: #9ca3af;
+  --border: #e5e7eb;
+  --accent: #4f46e5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1a1e;
+    --bg-side: #202024;
+    --bg-card: #26262b;
+    --bg-active: #2a2a48;
+    --bg-canvas: #141416;
+    --fg: #c9c9d1;
+    --fg-strong: #f0f0f4;
+    --fg-muted: #6b6b78;
+    --border: #303038;
+    --accent: #6366f1;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+  font-size: 14px;
+}
+
+input, textarea, button {
+  font-family: inherit;
+  color: var(--fg);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+}
+input:focus, textarea:focus { border-color: var(--accent); }
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.btn-primary:hover { opacity: 0.9; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.btn-ghost:hover { background: var(--bg-active); }
+
+.hint {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+/* ---------- 阅读器 ---------- */
+.viewer-wrap {
+  position: relative;
+  padding: 20px 0 60px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  min-height: 100%;
+}
+
+.canvas-host {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.pdf-page {
+  position: relative;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.16);
+  user-select: text;
+}
+
+.pdf-canvas { display: block; }
+
+/* 标注层：在文本层之下，不接收鼠标事件（避免挡住文本选择） */
+.ann-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ann-rect {
+  position: absolute;
+  mix-blend-mode: multiply;
+  pointer-events: auto;
+  z-index: 0;
+  cursor: pointer;
+  border-radius: 1px;
+}
+
+.viewer-hint {
+  position: absolute;
+  top: 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+/* ---------- 选区气泡 ---------- */
+.sel-bubble {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
+  padding: 8px 10px;
+  z-index: 900;
+  max-width: 320px;
+}
+
+.sel-quote {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-bottom: 6px;
+  line-height: 1.4;
+  max-height: 48px;
+  overflow: hidden;
+}
+
+.sel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.dot.active { border-color: var(--fg-strong); }
+
+.doc-card:hover { background: var(--bg-active); }
+
+/* ---------- pdf.js TextLayer（透明文本层，使 canvas 上文字可选中）---------- */
+.textLayer {
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 1;
+}
+
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.textLayer span[role='img'] {
+  user-select: none;
+  cursor: default;
+}
+
+/* 选中文字时给一点可见反馈 */
+.textLayer ::selection {
+  background: rgba(79, 70, 229, 0.28);
+}
+
+/* ---------- 可拖拽分隔条 ---------- */
+.resizer {
+  flex: 0 0 5px;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 20;
+  transition: background 0.12s;
+}
+.resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 1px;
+  background: var(--border);
+}
+.resizer:hover,
+.resizer.active {
+  background: var(--accent);
+}
+.resizer:hover::after,
+.resizer.active::after {
+  background: transparent;
+}
+
+/* 阅读区：内容比容器宽时允许横向滚动（而不是裁掉右侧） */
+.viewer-wrap {
+  min-width: min-content;
+}
+
+/* 放大后超宽时，滚动条始终可见，避免用户以为没反应 */
+main::-webkit-scrollbar { width: 10px; height: 10px; }
+main::-webkit-scrollbar-thumb {
+  background: var(--fg-muted);
+  border-radius: 5px;
+  opacity: 0.5;
+}
+main::-webkit-scrollbar-track { background: transparent; }

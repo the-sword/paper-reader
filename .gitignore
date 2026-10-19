@@ -1,0 +1,48 @@
+# ---------- 依赖 ----------
+node_modules/
+.pnp
+.pnp.js
+
+# ---------- 构建产物 ----------
+dist/
+build/
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# ---------- 环境与密钥 ----------
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---------- 日志与临时文件 ----------
+*.log
+logs/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# ---------- 本地数据（绝不入库） ----------
+data/
+uploads/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ---------- 编辑器 ----------
+.vscode/
+.idea/

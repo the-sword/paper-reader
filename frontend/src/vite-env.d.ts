@@ -1,0 +1,14 @@
+/// <reference types="vite/client" />
+
+declare module '*?url' {
+  const src: string
+  export default src
+}
+
+interface ImportMetaEnv {
+  readonly VITE_AUTH_TOKEN?: string
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv
+}
