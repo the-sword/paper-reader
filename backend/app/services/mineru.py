@@ -38,6 +38,19 @@ class MinerUError(RuntimeError):
     pass
 
 
+_IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".jp2")
+
+
+def _is_image_entry(name: str) -> bool:
+    """判断 zip 内条目是否为图片。兼容 "images/x.jpg" 与 "a/images/x.jpg"。"""
+    if name.endswith("/"):
+        return False
+    low = name.lower()
+    if not low.endswith(_IMG_EXTS):
+        return False
+    return "images/" in low or "/images/" in low
+
+
 @dataclass
 class ParseResult:
     full_md: str
@@ -158,7 +171,9 @@ def fetch_result(task_id: str) -> ParseResult:
                 import json
 
                 content_list = json.loads(zf.read(name).decode("utf-8", errors="replace"))
-            elif "/images/" in name and not name.endswith("/"):
+            elif _is_image_entry(name):
+                # zip 内路径形如 "images/xxx.jpg"（开头无斜杠），
+                # 早期用 "/images/" 判断会漏掉全部图片。
                 images[name.rsplit("/", 1)[-1]] = zf.read(name)
 
     if not full_md and not content_list:

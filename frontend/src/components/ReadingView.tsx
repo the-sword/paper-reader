@@ -239,15 +239,47 @@ function SegmentBlock({
   }, [seg.source, seg.kind])
 
   if (seg.kind === 'figure') {
+    const imgUrl = seg.img_path
+      ? `/api/reading/${encodeURIComponent(seg.document_id)}/asset/${seg.img_path}`
+      : null
     return (
       <figure ref={register} data-segid={seg.id} style={{ margin: '18px 0', textAlign: 'center' }}>
-        <div style={{
-          padding: '28px 12px', background: 'var(--bg-card)', border: '1px dashed var(--border)',
-          borderRadius: 8, color: 'var(--fg-muted)', fontSize: 12,
-        }}>
-          [图表] {seg.caption || seg.source || ''}
-        </div>
+        {imgUrl ? (
+          <img
+            src={imgUrl}
+            alt={seg.caption || 'figure'}
+            loading="lazy"
+            style={{
+              maxWidth: '100%', borderRadius: 8, border: '1px solid var(--border)',
+              background: '#fff',
+            }}
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = 'none'
+            }}
+          />
+        ) : (
+          <div style={{
+            padding: '28px 12px', background: 'var(--bg-card)', border: '1px dashed var(--border)',
+            borderRadius: 8, color: 'var(--fg-muted)', fontSize: 12,
+          }}>[图表]</div>
+        )}
+        {seg.caption && (
+          <figcaption style={{
+            fontSize: 12, color: 'var(--fg-muted)', marginTop: 6, lineHeight: 1.5,
+            maxWidth: '92%', margin: '6px auto 0',
+          }}>{seg.caption}</figcaption>
+        )}
       </figure>
+    )
+  }
+
+  // 参考文献：紧凑展示，默认折叠
+  if (seg.kind === 'reference') {
+    return (
+      <div ref={register} data-segid={seg.id} style={{
+        fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.6, margin: '3px 0',
+        paddingLeft: 12, textIndent: -12,
+      }}>{seg.source}</div>
     )
   }
 

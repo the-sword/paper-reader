@@ -52,6 +52,29 @@ def _startup() -> None:
 app.include_router(api_router, prefix="/api")
 
 
+# ---- 解析产物（MinerU 抽取的图片等）----
+from fastapi import HTTPException as _HTTPException
+from fastapi.responses import FileResponse as _FileResponse
+
+
+@app.get("/api/reading/{doc_id}/asset/{subpath:path}")
+def get_parsed_asset(doc_id: str, subpath: str):
+    """提供 parsed/<doc_id>/ 下的文件（图片、full.md 等）。
+
+    注意：这里做路径穿越校验，只允许访问该文档自己的目录。
+    """
+    s = get_settings()
+    base = (s.parsed_dir / doc_id).resolve()
+    target = (base / subpath).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        raise _HTTPException(403, "非法路径")
+    if not target.is_file():
+        raise _HTTPException(404, "资源不存在")
+    return _FileResponse(target)
+
+
 # ---- 前端静态资源（构建产物存在时托管）----
 _DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if _DIST.exists():

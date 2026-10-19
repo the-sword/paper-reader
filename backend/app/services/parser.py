@@ -139,6 +139,34 @@ def _segments_from_content_list(items: list[dict[str, Any]]) -> list[dict[str, A
             })
             idx += 1
 
+        elif typ == "chart":
+            caption = " ".join(item.get("chart_caption") or item.get("img_caption") or [])
+            segs.append({
+                "idx": idx, "kind": "figure", "section": current_section,
+                "source": json.dumps({
+                    "img_path": item.get("img_path"),
+                    "caption": caption,
+                }, ensure_ascii=False),
+                "page": page,
+                "bbox": json.dumps(item.get("bbox")) if item.get("bbox") else None,
+            })
+            idx += 1
+
+        elif typ == "ref_text":
+            # 参考文献：单独归类，不与正文混杂，前端可折叠
+            text = (item.get("text") or "").strip()
+            if text:
+                segs.append({
+                    "idx": idx, "kind": "reference", "section": "References",
+                    "source": text, "page": page,
+                    "bbox": json.dumps(item.get("bbox")) if item.get("bbox") else None,
+                })
+                idx += 1
+
+        elif typ in ("header", "footer", "page_number", "page_footnote", "aside_text"):
+            # 页眉/页脚/页码/边注：丢弃，避免污染正文
+            continue
+
     return segs
 
 
