@@ -79,25 +79,35 @@ check_env() {
 setup_python() {
   info "准备 Python 环境"
 
-  # 已存在 venv 且可用则复用
+  # 已存在 venv 且依赖齐全则复用
   if [ -x "$VENV/bin/python" ] && "$VENV/bin/python" -c "import fastapi" 2>/dev/null; then
     ok "复用已有 venv"
     return
   fi
 
-  if [ ! -d "$VENV" ]; then
-    if python3 -m venv "$VENV" 2>/dev/null; then
-      :
-    else
-      warn "创建 venv 失败（缺 python3-venv？），尝试系统 Python 模式"
-      warn "如需隔离环境可执行: sudo apt install python3-venv"
-      USE_SYSTEM_PY=1
-      return
-    fi
+  # venv 缺失或不完整（python3-venv 未装时创建半途而废：目录在、python 在、
+  # 但没有 pip），一律删除重建，否则会卡在 "bin/pip: No such file or directory"
+  rm -rf "$VENV"
+
+  if ! python3 -m venv "$VENV"; then
+    rm -rf "$VENV"
+    warn "创建 venv 失败（缺 python3-venv？），尝试系统 Python 模式"
+    warn "如需隔离环境可执行: sudo apt install python3-venv"
+    USE_SYSTEM_PY=1
+    return
   fi
 
-  "$VENV/bin/pip" install -q --upgrade pip
-  "$VENV/bin/pip" install -q -r "$ROOT/backend/requirements.txt" \
+  # 部分发行版 venv 能创建成功但不带 pip（ensurepip 拆包安装），校验后再装依赖
+  if ! "$VENV/bin/python" -m pip --version >/dev/null 2>&1; then
+    rm -rf "$VENV"
+    warn "venv 缺少 pip（缺 python3-venv？），改用系统 Python 模式"
+    warn "如需隔离环境可执行: sudo apt install python3-venv"
+    USE_SYSTEM_PY=1
+    return
+  fi
+
+  "$VENV/bin/python" -m pip install -q --upgrade pip
+  "$VENV/bin/python" -m pip install -q -r "$ROOT/backend/requirements.txt" \
     || die "依赖安装失败"
   ok "Python 依赖就绪 ($(du -sh "$VENV" | cut -f1))"
 }
@@ -111,7 +121,9 @@ check_system_python() {
   done
   if [ ${#miss[@]} -gt 0 ]; then
     info "安装缺失依赖: ${miss[*]}"
+    # 新版 Debian/Ubuntu 的 pip 受 PEP 668 保护，需要 --break-system-packages
     pip3 install -q -r "$ROOT/backend/requirements.txt" \
+      || pip3 install -q --break-system-packages -r "$ROOT/backend/requirements.txt" \
       || die "依赖安装失败，请手动执行: pip3 install -r backend/requirements.txt"
   fi
   ok "系统 Python 依赖就绪"
