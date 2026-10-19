@@ -293,14 +293,18 @@ export const api = {
     req<{ ok: boolean }>('/reading/backup/config', { method: 'POST', body: JSON.stringify(c) }),
   testBackup: () =>
     req<{ ok: boolean; message?: string; error?: string }>('/reading/backup/test', { method: 'POST' }),
-  runBackup: (includePdfs = false) =>
-    req<{ ok: boolean; size_mb: number; file_count: number; uploaded_at: string; endpoint: string }>(
+  runBackup: (includePdfs = false, password?: string) =>
+    req<{
+      ok: boolean; size_mb: number; file_count: number; encrypted: boolean
+      uploaded_at: string; endpoint: string
+    }>(
       '/reading/backup/run',
-      { method: 'POST', body: JSON.stringify({ include_pdfs: includePdfs }) }),
+      { method: 'POST', body: JSON.stringify({ include_pdfs: includePdfs, password: password || null }) }),
   remoteBackupInfo: () =>
     req<{ exists: boolean; size_bytes?: number; last_modified?: string }>('/reading/backup/remote'),
-  restoreBackup: () =>
-    req<{ ok: boolean; restored_files: number }>('/reading/backup/restore', { method: 'POST' }),
+  restoreBackup: (password?: string) =>
+    req<{ ok: boolean; restored_files: number }>('/reading/backup/restore',
+      { method: 'POST', body: JSON.stringify({ password: password || null }) }),
 
   // ---- AI 探活 ----
   probeAI: () => req<{ ok: boolean; latency_ms?: number; error?: string }>('/reading/config/ai/probe'),

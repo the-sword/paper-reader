@@ -11,8 +11,10 @@
 """
 from __future__ import annotations
 
+import base64
 import io
 import json
+import os
 import shutil
 import tarfile
 import tempfile
@@ -26,6 +28,78 @@ from ..core.db import db
 from ..core.http import make_client
 
 MANIFEST_NAME = "BACKUP_INFO.json"
+
+# 归档加密后的文件扩展名
+ENCRYPTED_SUFFIX = ".enc"
+
+# 备份中需要排除的敏感键（AI key、各类 token、密码）
+SENSITIVE_SETTING_PREFIXES = (
+    "ai.api_key",
+    "webdav",
+    "engine.",
+)
+
+PBKDF2_ITERATIONS = 200_000
+
+
+def _derive_key(password: str, salt: bytes) -> bytes:
+    """用 PBKDF2-HMAC-SHA256 从口令派生 Fernet 密钥。"""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=PBKDF2_ITERATIONS,
+    )
+    return base64.urlsafe_b64encode(kdf.derive(password.encode("utf-8")))
+
+
+def encrypt_archive(blob: bytes, password: str) -> bytes:
+    """加密归档。输出格式：MAGIC(8) + salt(16) + Fernet 密文。"""
+    from cryptography.fernet import Fernet
+
+    salt = os.urandom(16)
+    f = Fernet(_derive_key(password, salt))
+    return b"PRBAK001" + salt + f.encrypt(blob)
+
+
+def decrypt_archive(blob: bytes, password: str) -> bytes:
+    """解密归档。校验魔数与口令。"""
+    from cryptography.fernet import Fernet, InvalidToken
+
+    if not blob.startswith(b"PRBAK001"):
+        raise RuntimeError("不是加密的备份文件")
+    salt = blob[8:24]
+    cipher = blob[24:]
+    f = Fernet(_derive_key(password, salt))
+    try:
+        return f.decrypt(cipher)
+    except InvalidToken as e:
+        raise RuntimeError("密码错误或文件已损坏") from e
+
+
+def _redact_sensitive(db_snapshot: Path) -> str:
+    """从数据库快照中删除敏感配置，返回删除的键数。
+
+    备份可能被放到不受控的 WebDAV 或公开仓库，密钥不应随备份流动。
+    恢复后由用户在设置里重新填写。
+    """
+    import sqlite3
+
+    deleted = 0
+    conn = sqlite3.connect(db_snapshot)
+    try:
+        rows = conn.execute("SELECT key FROM settings").fetchall()
+        for (key,) in rows:
+            if any(key == p or key.startswith(p) for p in SENSITIVE_SETTING_PREFIXES):
+                conn.execute("DELETE FROM settings WHERE key=?", (key,))
+                deleted += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return deleted
 
 
 def _now() -> str:
@@ -138,6 +212,8 @@ def _build_archive(include_pdfs: bool) -> tuple[bytes, dict[str, Any]]:
             finally:
                 dst.close()
                 src.close()
+            # 剔除密钥类配置，避免随备份外流
+            _redact_sensitive(tmp_db)
             tar.add(tmp_db, arcname="library.db")
             files_added.append("library.db")
             total_bytes += tmp_db.stat().st_size
@@ -176,12 +252,16 @@ def _build_archive(include_pdfs: bool) -> tuple[bytes, dict[str, Any]]:
     return buf.getvalue(), manifest
 
 
-def backup(include_pdfs: bool = False) -> dict[str, Any]:
-    """打包并上传到 WebDAV。"""
+def backup(include_pdfs: bool = False, password: str | None = None) -> dict[str, Any]:
+    """打包并上传到 WebDAV。password 非空时加密后再上传。"""
     endpoint = _endpoint()
     user, pw = _auth()
 
     blob, manifest = _build_archive(include_pdfs)
+    encrypted = bool(password and password.strip())
+    if encrypted:
+        blob = encrypt_archive(blob, password.strip())
+
     size_mb = len(blob) / 1024 / 1024
 
     with make_client(endpoint, timeout=300) as client:
@@ -199,6 +279,8 @@ def backup(include_pdfs: bool = False) -> dict[str, Any]:
         "size_mb": round(size_mb, 2),
         "file_count": manifest["file_count"],
         "include_pdfs": include_pdfs,
+        "encrypted": encrypted,
+        "settings_redacted": True,
         "uploaded_at": manifest["created_at"],
         "endpoint": endpoint,
     }
@@ -225,7 +307,7 @@ def list_remote() -> dict[str, Any]:
 # 恢复
 # ---------------------------------------------------------------------------
 
-def restore() -> dict[str, Any]:
+def restore(password: str | None = None) -> dict[str, Any]:
     """从 WebDAV 下载并恢复到当前库。
 
     安全措施：恢复前把现有库另存为 library.db.before-restore-<时间戳>
@@ -241,13 +323,20 @@ def restore() -> dict[str, Any]:
     if r.status_code != 200:
         raise RuntimeError(f"下载失败 HTTP {r.status_code}")
 
+    # 加密归档需先解密
+    payload = r.content
+    if payload.startswith(b"PRBAK001"):
+        if not (password and password.strip()):
+            raise RuntimeError("该备份已加密，请输入密码")
+        payload = decrypt_archive(payload, password.strip())
+
     # 先备份当前状态
     if s.db_path.exists():
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         shutil.copy2(s.db_path, s.lib_root / f"library.db.before-restore-{stamp}")
 
     extracted = 0
-    with tarfile.open(fileobj=io.BytesIO(r.content), mode="r:gz") as tar:
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
         for member in tar.getmembers():
             # 安全：拒绝绝对路径和 .. 穿越
             if member.name.startswith("/") or ".." in Path(member.name).parts:

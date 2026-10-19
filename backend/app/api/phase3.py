@@ -154,6 +154,11 @@ class WebDAVReq(BaseModel):
 
 class BackupReq(BaseModel):
     include_pdfs: bool = False
+    password: str | None = None   # 非空则加密归档
+
+
+class RestoreReq(BaseModel):
+    password: str | None = None
 
 
 @router.get("/backup/config")
@@ -175,7 +180,7 @@ def test_backup() -> dict[str, Any]:
 @router.post("/backup/run")
 def run_backup(body: BackupReq) -> dict[str, Any]:
     try:
-        return backup_svc.backup(include_pdfs=body.include_pdfs)
+        return backup_svc.backup(include_pdfs=body.include_pdfs, password=body.password)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, str(e)) from e
 
@@ -189,9 +194,9 @@ def remote_info() -> dict[str, Any]:
 
 
 @router.post("/backup/restore")
-def restore_backup() -> dict[str, Any]:
+def restore_backup(body: RestoreReq | None = None) -> dict[str, Any]:
     try:
-        return backup_svc.restore()
+        return backup_svc.restore(password=body.password if body else None)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, str(e)) from e
 

@@ -627,6 +627,9 @@ function BackupTab() {
   const [password, setPassword] = useState('')
   const [fileName, setFileName] = useState('paper-reader-backup.tar.gz')
   const [includePdfs, setIncludePdfs] = useState(false)
+  /** 加密口令（仅本次会话使用，不落库） */
+  const [backupPw, setBackupPw] = useState('')
+  const [restorePw, setRestorePw] = useState('')
   const [cfg, setCfg] = useState<{ password_set: boolean; password_masked: string } | null>(null)
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -666,8 +669,8 @@ function BackupTab() {
   const run = async () => {
     setBusy('backup'); setMsg('')
     try {
-      const r = await api.runBackup(includePdfs)
-      setMsg(`✅ 已上传 ${r.size_mb} MB（${r.file_count} 个文件）`)
+      const r = await api.runBackup(includePdfs, backupPw || undefined)
+      setMsg(`✅ 已上传 ${r.size_mb} MB（${r.file_count} 个文件）${r.encrypted ? '，已加密' : ''}`)
       const info = await api.remoteBackupInfo().catch(() => null)
       if (info) setRemote(info)
     } catch (e) { setMsg(`❌ ${String(e).replace(/^Error:\s*/, '')}`) } finally { setBusy(null) }
@@ -686,8 +689,8 @@ function BackupTab() {
     if (!confirm('确定从远端恢复？当前数据库会先另存一份再覆盖。')) return
     setBusy('restore'); setMsg('')
     try {
-      const r = await api.restoreBackup()
-      setMsg(`✅ 已恢复 ${r.restored_files} 个文件，请重启服务`)
+      const r = await api.restoreBackup(restorePw || undefined)
+      setMsg(`✅ 已恢复 ${r.restored_files} 个文件，请重启服务；加密备份恢复后需重填 API 密钥`)
     } catch (e) { setMsg(`❌ ${String(e).replace(/^Error:\s*/, '')}`) } finally { setBusy(null) }
   }
 
@@ -729,6 +732,38 @@ function BackupTab() {
         <input type="checkbox" checked={includePdfs} style={{ width: 'auto', margin: 0 }}
           onChange={(e) => setIncludePdfs(e.target.checked)} />
         <label style={{ fontSize: 12 }}>包含 PDF 原文（体积大，但换机后可完整恢复）</label>
+      </div>
+
+      <div style={{
+        marginBottom: 12, padding: 10, borderRadius: 6,
+        background: 'var(--bg-side)', fontSize: 11, lineHeight: 1.7,
+      }}>
+        <div style={{ marginBottom: 6, color: 'var(--fg-strong)', fontWeight: 600 }}>
+          加密与密钥
+        </div>
+        <div style={{ marginBottom: 6, color: 'var(--fg-muted)' }}>
+          备份会自动剔除 API 密钥（AI Key、MinerU Token、引擎密钥、WebDAV 密码），
+          恢复后需在设置里重新填写。下方口令用于加密整个归档，不落库、不上传。
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+          <input
+            type="password" value={backupPw} onChange={(e) => setBackupPw(e.target.value)}
+            placeholder="备份加密口令（留空则不加密）"
+            style={{ flex: 1, fontSize: 12, padding: '5px 8px' }}
+          />
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input
+            type="password" value={restorePw} onChange={(e) => setRestorePw(e.target.value)}
+            placeholder="恢复时输入口令（如备份已加密）"
+            style={{ flex: 1, fontSize: 12, padding: '5px 8px' }}
+          />
+        </div>
+        {backupPw && (
+          <div style={{ marginTop: 6, color: '#b45309' }}>
+            ⚠️ 口令不会保存在任何地方，请自行牢记；丢失将无法恢复加密备份。
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
