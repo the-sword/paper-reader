@@ -18,9 +18,34 @@ export default function Sidebar({ width = 260 }: { width?: number }) {
   const refreshSidebar = useStore((s) => s.refreshSidebar)
   const refreshLibrary = useStore((s) => s.refreshLibrary)
 
+  const moveDocumentToFolder = useStore((s) => s.moveDocumentToFolder)
   const [newFolder, setNewFolder] = useState('')
   const [newTag, setNewTag] = useState('')
   const [adding, setAdding] = useState<'folder' | 'tag' | null>(null)
+  /** 当前拖拽悬停的目标：'all' 或 folderId */
+  const [dragTarget, setDragTarget] = useState<string | null>(null)
+
+  /** 判断拖拽内容是否为文献 */
+  const isDocDrag = (e: React.DragEvent) =>
+    e.dataTransfer.types.includes('application/x-paper-doc')
+
+  const dropProps = (targetId: string | null) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (!isDocDrag(e)) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      setDragTarget(targetId ?? 'all')
+    },
+    onDragLeave: () => setDragTarget(null),
+    onDrop: (e: React.DragEvent) => {
+      const docId = e.dataTransfer.getData('application/x-paper-doc')
+      setDragTarget(null)
+      if (!docId) return
+      e.preventDefault()
+      // 按住 Alt 为「追加到该文件夹」，默认是「移动到该文件夹」
+      void moveDocumentToFolder(docId, targetId, e.altKey)
+    },
+  })
 
   const rootFolders = folders.filter((f) => !f.parent_id)
   const childrenOf = (id: string) => folders.filter((f) => f.parent_id === id)
@@ -45,7 +70,18 @@ export default function Sidebar({ width = 260 }: { width?: number }) {
 
   return (
     <aside style={sidebarStyle}>
-      <div style={itemStyle(activeFolder === null && activeTag === null)} onClick={() => { setFolder(null) }}>
+      <div
+        style={{
+          ...itemStyle(activeFolder === null && activeTag === null),
+          ...(dragTarget === 'all'
+            ? { background: 'var(--bg-active)', outline: '2px dashed var(--accent)', outlineOffset: -2 }
+            : {}),
+        }}
+        onClick={() => { setFolder(null) }}
+        {...dropProps(null)}
+        data-drop-target="all"
+        title="拖到此处可移出所有文件夹"
+      >
         <span>📚</span> 全部文献
       </div>
 
@@ -74,7 +110,17 @@ export default function Sidebar({ width = 260 }: { width?: number }) {
 
       {rootFolders.map((f) => (
         <div key={f.id}>
-          <div style={itemStyle(activeFolder === f.id)} onClick={() => setFolder(f.id)}>
+          <div
+            style={{
+              ...itemStyle(activeFolder === f.id),
+              ...(dragTarget === f.id
+                ? { background: 'var(--bg-active)', outline: '2px dashed var(--accent)', outlineOffset: -2 }
+                : {}),
+            }}
+            onClick={() => setFolder(f.id)}
+            {...dropProps(f.id)}
+            data-folder-id={f.id}
+          >
             <span>📁</span>
             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {f.name}
@@ -82,7 +128,19 @@ export default function Sidebar({ width = 260 }: { width?: number }) {
             <span style={{ color: 'var(--fg-muted)', fontSize: 11 }}>{f.count ?? 0}</span>
           </div>
           {childrenOf(f.id).map((c) => (
-            <div key={c.id} style={{ ...itemStyle(activeFolder === c.id), paddingLeft: 24 }} onClick={() => setFolder(c.id)}>
+            <div
+              key={c.id}
+              style={{
+                ...itemStyle(activeFolder === c.id),
+                paddingLeft: 24,
+                ...(dragTarget === c.id
+                  ? { background: 'var(--bg-active)', outline: '2px dashed var(--accent)', outlineOffset: -2 }
+                  : {}),
+              }}
+              onClick={() => setFolder(c.id)}
+              {...dropProps(c.id)}
+              data-folder-id={c.id}
+            >
               <span>📄</span>
               <span style={{ flex: 1 }}>{c.name}</span>
             </div>

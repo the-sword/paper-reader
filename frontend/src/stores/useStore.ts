@@ -39,6 +39,7 @@ interface State {
   addAnnotation: (docId: string, page: number, rects: number[][], quote: string, color: string) => Promise<void>
   removeAnnotation: (id: string) => Promise<void>
   clearError: () => void
+  moveDocumentToFolder: (docId: string, folderId: string | null, additive?: boolean) => Promise<void>
 
   // 阅读动作
   loadSegments: (docId: string) => Promise<void>
@@ -148,6 +149,54 @@ export const useStore = create<State>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
+
+  /**
+   * 把文献移动到文件夹。
+   *   folderId = null  → 移出所有文件夹（未分类）
+   *   additive = true  → 追加到该文件夹（保留原有归属）
+   *   默认（false）    → 替换：只属于目标文件夹
+   */
+  moveDocumentToFolder: async (docId, folderId, additive = false) => {
+    const doc = get().documents.find((d) => d.id === docId)
+    const existing = (doc?.folders ?? []).map((f) => f.id)
+
+    let next: string[]
+    if (folderId === null) {
+      next = []
+    } else if (additive) {
+      next = Array.from(new Set([...existing, folderId]))
+    } else {
+      next = [folderId]
+    }
+
+    // 乐观更新，失败再回滚
+    const prev = existing
+    set({
+      documents: get().documents.map((d) =>
+        d.id === docId
+          ? {
+              ...d,
+              folders: get().folders.filter((f) => next.includes(f.id)),
+            }
+          : d,
+      ),
+    })
+
+    try {
+      await api.setDocumentFolders(docId, next)
+      await get().refreshSidebar()
+      await get().refreshLibrary()
+    } catch (e) {
+      set({
+        error: `移动失败：${String(e).replace(/^Error:\s*/, '')}`,
+        documents: get().documents.map((d) =>
+          d.id === docId
+            ? { ...d, folders: get().folders.filter((f) => prev.includes(f.id)) }
+            : d,
+        ),
+      })
+    }
+  },
 
   // ---------------- 阅读 ----------------
 

@@ -90,14 +90,28 @@ export default function DocumentList({ width = 340 }: { width?: number }) {
 function DocCard({ doc, active, onClick, onDelete }: {
   doc: DocumentMeta; active: boolean; onClick: () => void; onDelete: () => void
 }) {
+  const [dragging, setDragging] = useState(false)
+
   return (
     <div
       onClick={onClick}
-      className="doc-card"
+      className={`doc-card${dragging ? ' dragging' : ''}`}
+      data-doc-id={doc.id}
+      draggable
+      onDragStart={(e) => {
+        // 用自定义 MIME 区分「拖动文献」与「拖入文件」
+        e.dataTransfer.setData('application/x-paper-doc', doc.id)
+        e.dataTransfer.setData('text/plain', doc.title)
+        e.dataTransfer.effectAllowed = 'move'
+        setDragging(true)
+      }}
+      onDragEnd={() => setDragging(false)}
+      title="拖动到左侧文件夹可归档"
       style={{
-        padding: '8px 10px', borderRadius: 8, cursor: 'pointer', marginBottom: 4,
+        padding: '8px 10px', borderRadius: 8, cursor: 'grab', marginBottom: 4,
         background: active ? 'var(--bg-active)' : 'transparent',
         borderLeft: active ? '3px solid var(--accent)' : '3px solid transparent',
+        opacity: dragging ? 0.45 : 1,
       }}
     >
       <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4, lineHeight: 1.35 }}>

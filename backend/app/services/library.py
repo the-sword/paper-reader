@@ -216,6 +216,21 @@ def delete_folder(folder_id: str) -> None:
         conn.execute("DELETE FROM folders WHERE id=?", (folder_id,))
 
 
+def set_document_folders(doc_id: str, folder_ids: list[str]) -> None:
+    """原子地替换一篇文献的文件夹归属。
+
+    拖拽移动用这个：一次事务完成「从原文件夹移除 + 加入目标文件夹」，
+    避免中间态。传空列表表示移出所有文件夹（未分类）。
+    """
+    with db() as conn:
+        conn.execute("DELETE FROM document_folders WHERE document_id=?", (doc_id,))
+        for fid in dict.fromkeys(folder_ids):  # 去重且保序
+            conn.execute(
+                "INSERT OR IGNORE INTO document_folders (document_id, folder_id) VALUES (?,?)",
+                (doc_id, fid),
+            )
+
+
 def move_document(doc_id: str, folder_id: str, add: bool = True) -> None:
     with db() as conn:
         if add:

@@ -153,6 +153,9 @@ export const api = {
     return req<DocumentMeta>('/documents/upload', { method: 'POST', body: fd })
   },
   deleteDocument: (id: string) => req<{ ok: boolean }>(`/documents/${id}`, { method: 'DELETE' }),
+  setDocumentFolders: (docId: string, folderIds: string[]) =>
+    req<{ ok: boolean; folder_ids: string[] }>(`/documents/${docId}/folders`,
+      { method: 'PUT', body: JSON.stringify({ folder_ids: folderIds }) }),
   pdfUrl: (id: string) => `/api/documents/${id}/file${AUTH_TOKEN ? `?token=${AUTH_TOKEN}` : ''}`,
 
   listFolders: () => req<Folder[]>('/folders'),

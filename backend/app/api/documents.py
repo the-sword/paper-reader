@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 from fastapi.responses import FileResponse
 
 from ..services import library
@@ -49,6 +50,19 @@ def get_pdf(doc_id: str) -> FileResponse:
 def delete_document(doc_id: str) -> dict:
     library.delete_document(doc_id)
     return {"ok": True}
+
+
+class FolderSetReq(BaseModel):
+    folder_ids: list[str]
+
+
+@router.put("/{doc_id}/folders")
+def set_document_folders(doc_id: str, body: FolderSetReq) -> dict:
+    """设置文献所属文件夹（拖拽移动用）。空列表表示移出所有文件夹。"""
+    if not library.get_document(doc_id):
+        raise HTTPException(404, "文献不存在")
+    library.set_document_folders(doc_id, body.folder_ids)
+    return {"ok": True, "folder_ids": body.folder_ids}
 
 
 @router.post("/{doc_id}/folders/{folder_id}")
