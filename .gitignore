@@ -4,8 +4,8 @@ node_modules/
 .pnp.js
 
 # ---------- 构建产物 ----------
-dist/
 build/
+dist/
 *.tsbuildinfo
 tsconfig.tsbuildinfo
 
