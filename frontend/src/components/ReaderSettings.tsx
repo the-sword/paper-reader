@@ -8,6 +8,9 @@
  *   - 行高 1.6-2.2
  *
  * 所有调整实时生效，并写入偏好设置持久化。
+ *
+ * 定位：弹窗用 position:fixed 锚定到按钮位置。
+ * 若用 absolute 会被右侧滚动容器裁剪而遮挡在正文之下。
  */
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
@@ -41,17 +44,38 @@ interface Props {
 
 export default function ReaderSettings({ value, onChange }: Props) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  // 弹窗固定定位用
+  const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null)
 
   // 点击外部关闭
   useEffect(() => {
     if (!open) return
     const close = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) setOpen(false)
     }
     document.addEventListener('mousedown', close)
     return () => document.removeEventListener('mousedown', close)
   }, [open])
+
+  const toggle = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect()
+      // 弹窗在按钮左下方，宽度 260
+      const panelW = 264
+      const panelH = 320
+      let left = r.right - panelW
+      let top = r.bottom + 8
+      // 边界保护：不超出视口
+      left = Math.max(8, Math.min(left, window.innerWidth - panelW - 8))
+      if (top + panelH > window.innerHeight) {
+        top = Math.max(8, r.top - panelH - 8)
+      }
+      setAnchor({ left, top })
+    }
+    setOpen((v) => !v)
+  }
 
   const update = (patch: Partial<ReaderPrefs>) => {
     const next = { ...value, ...patch }
@@ -73,21 +97,25 @@ export default function ReaderSettings({ value, onChange }: Props) {
   )
 
   return (
-    <div ref={ref} style={{ position: 'relative' }}>
+    <>
       <button
+        ref={btnRef}
         className="btn-ghost"
         style={{ padding: '4px 8px' }}
         title="阅读排版设置"
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
       >Aa</button>
 
-      {open && (
-        <div style={{
-          position: 'absolute', right: 0, top: '110%', zIndex: 1200,
-          width: 260, padding: 12, borderRadius: 8,
-          background: 'var(--bg)', border: '1px solid var(--border)',
-          boxShadow: '0 8px 28px rgba(0,0,0,0.22)',
-        }}>
+      {open && anchor && (
+        <div
+          ref={panelRef}
+          style={{
+            position: 'fixed', left: anchor.left, top: anchor.top, zIndex: 5000,
+            width: 264, padding: 12, borderRadius: 8,
+            background: 'var(--bg)', border: '1px solid var(--border)',
+            boxShadow: '0 12px 40px rgba(0,0,0,0.3)',
+          }}
+        >
           {/* 主题 */}
           <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 6 }}>主题</div>
           <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
@@ -152,6 +180,6 @@ export default function ReaderSettings({ value, onChange }: Props) {
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }
