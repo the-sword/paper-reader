@@ -186,8 +186,9 @@ export default function RichText({
 }) {
   const parts = useMemo(() => splitInlineMath(text), [text])
 
-  // 不含公式且无需高亮：直接返回纯文本（避免无谓的 DOM 开销）
-  if (parts.length === 1 && parts[0].type === 'text' && !highlights?.length) {
+  // 不含公式、无高亮、也不需要识别引用：直接返回纯文本（避免无谓的 DOM 开销）
+  // 注意：onCite 存在时必须走完整渲染，否则引用标不会被识别成可点击元素
+  if (parts.length === 1 && parts[0].type === 'text' && !highlights?.length && !onCite) {
     return <>{text}</>
   }
 
