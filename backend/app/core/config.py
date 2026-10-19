@@ -12,12 +12,57 @@ def _default_lib_root() -> Path:
     return Path(os.environ.get("LIB_ROOT", Path.home() / "paper-reader"))
 
 
+# 项目根目录 = backend/ 的上一级
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    """解析单个 .env，返回 {大写键: 值}。空值不返回。"""
+    out: dict[str, str] = {}
+    if not path.exists():
+        return out
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if not key or not val:
+            continue  # 空值跳过，避免覆盖其它来源的非空配置
+        out[key] = val
+    return out
+
+
+def merged_env() -> dict[str, str]:
+    """合并两处 .env，backend/.env 优先，但空值永远不覆盖非空值。
+
+    背景：用户常把 .env 放在项目根目录，而程序按 backend/.env 读取，
+    或者两处都放、其中一处留空。这里统一兜住所有情况。
+    """
+    merged: dict[str, str] = {}
+    # 优先级从低到高：项目根 → backend
+    for path in (_PROJECT_ROOT / ".env", _BACKEND_DIR / ".env"):
+        merged.update(_read_env_file(path))
+    return merged
+
+
+_ENV_VALUES = merged_env()
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=None,          # 不用 pydantic 的文件加载，改用上面的手动合并
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    def __init__(self, **values):
+        """把合并后的 .env 作为最低优先级的初值，系统环境变量仍可覆盖。"""
+        base = {k.lower(): v for k, v in _ENV_VALUES.items()}
+        base.update(values)
+        super().__init__(**base)
 
     # ---- 数据 ----
     lib_root: Path = _default_lib_root()

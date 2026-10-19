@@ -83,12 +83,27 @@ paper-reader/
 
 复制 `backend/.env.example` 为 `backend/.env` 后按需填写。
 
+**配置文件可以放在两处**（程序都会读取，`backend/.env` 优先）：
+
+- `paper-reader/.env`（项目根目录）
+- `paper-reader/backend/.env`
+
+空值不会覆盖另一处的非空值，所以你可以只在一处填 key。
+
 **MinerU 与 AI 的 token 请直接写进 `.env`**（该文件已在 `.gitignore` 中），
 不要提交到版本库，也不要贴在对话记录里。
 
 AI 接口也可以在界面右上角 ⚙ 里配置，配置项存在本地数据库（settings 表），
 优先级高于环境变量。设置页支持填写术语表（每行 `英文=中文`），翻译时会注入
 prompt 保证全文译名一致。
+
+### 限流处理
+
+翻译时会遇到中转站的 rpm/tpm 限流（HTTP 429）。程序会自动指数退避重试
+（1s → 2s → 4s → 8s，最多 5 次），并尊重服务端的 `Retry-After`。
+前端并发默认为 2，失败连续 3 次会停止本批并提示。
+
+若频繁限流，可调小 `frontend/src/stores/useStore.ts` 里的 `CONCURRENCY`。
 
 ### 代理
 

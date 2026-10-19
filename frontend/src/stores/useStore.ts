@@ -46,8 +46,10 @@ interface State {
   refreshAIConfig: () => Promise<void>
 }
 
-/** 同时在飞的翻译请求上限 */
-const CONCURRENCY = 4
+/** 同时在飞的翻译请求上限（中转站常有 rpm 限流，默认保守取 2） */
+const CONCURRENCY = 2
+/** 连续失败多少次后停止本批翻译 */
+const MAX_ERRORS = 3
 
 export const useStore = create<State>((set, get) => ({
   folders: [],
@@ -227,30 +229,40 @@ export const useStore = create<State>((set, get) => ({
     set({ inflight })
 
     // 分片并发
+    let errStreak = 0
     for (let i = 0; i < pending.length; i += CONCURRENCY) {
       const chunk = pending.slice(i, i + CONCURRENCY)
+      const dropInflight = () => {
+        const ni = new Set(get().inflight)
+        chunk.forEach((id) => ni.delete(id))
+        set({ inflight: ni })
+      }
       try {
         const resp = await api.translateSegments(docId, chunk)
         const translations = { ...get().translations }
         for (const r of resp.results) {
           if (r.text) translations[r.segment_id] = { text: r.text, provider: r.provider }
         }
-        const nextInflight = new Set(get().inflight)
-        chunk.forEach((id) => nextInflight.delete(id))
-        set({ translations, inflight: nextInflight })
+        set({ translations })
+        dropInflight()
 
         if (resp.errors?.length) {
-          set({ error: `翻译失败：${resp.errors[0].error}` })
-          const ni = new Set(get().inflight)
-          chunk.forEach((id) => ni.delete(id))
-          set({ inflight: ni })
-          break
+          errStreak++
+          const first = resp.errors[0].error || ''
+          set({
+            error: first.includes('限流') || first.includes('429')
+              ? '接口限流，已自动重试；建议调小并发或稍后再试'
+              : `翻译失败：${first.slice(0, 120)}`,
+          })
+          if (errStreak >= MAX_ERRORS) break
+          // 限流时放慢节奏
+          await new Promise((r) => setTimeout(r, 1500 * errStreak))
+        } else {
+          errStreak = 0
         }
       } catch (e) {
-        set({ error: String(e) })
-        const ni = new Set(get().inflight)
-        chunk.forEach((id) => ni.delete(id))
-        set({ inflight: ni })
+        dropInflight()
+        set({ error: String(e).slice(0, 160) })
         break
       }
     }

@@ -24,8 +24,13 @@ SYSTEM_PROMPT = """你是一名专业的学术论文翻译。请把用户给出�
 要求：
 1. 保持学术严谨，术语使用领域通行译法；
 2. 公式、变量名、代码标识符、缩写（如 Transformer、BERT）保留原文；
-3. 只输出译文本身，不要添加任何解释、前缀或 Markdown 标记；
-4. 如果原文是标题，译文保持简短，不加句号。"""
+3. 人名一律保留英文原名，不要音译（如 Yihan Wang 保持原样）；
+4. 机构名、学校名、期刊名按通用中文译名翻译（如 Princeton University → 普林斯顿大学）；
+5. 邮箱地址、URL、数字和引用标记（如 [7,11,20]）原样保留；
+6. 数学符号、希腊字母保持原样；
+7. 只输出译文本身，不要添加任何解释、前缀或 Markdown 标记；
+8. 如果原文是标题，译文保持简短，不加句号；
+9. 如果原文已是中文或纯数字/符号，原样返回。"""
 
 
 def _now() -> str:
@@ -121,11 +126,7 @@ def translate_text(text: str, kind: str = "text") -> dict[str, Any]:
         "Content-Type": "application/json",
     }
 
-    with make_client(url, timeout=120) as client:
-        r = client.post(url, json=payload, headers=headers)
-        if r.status_code != 200:
-            raise RuntimeError(f"AI 接口错误 HTTP {r.status_code}: {r.text[:300]}")
-        body = r.json()
+    body = _post_with_retry(url, payload, headers)
 
     content = (body.get("choices") or [{}])[0].get("message", {}).get("content", "")
     content = content.strip()
@@ -140,6 +141,56 @@ def translate_text(text: str, kind: str = "text") -> dict[str, Any]:
         "token_in": usage.get("prompt_tokens"),
         "token_out": usage.get("completion_tokens"),
     }
+
+
+# 遇到这些状态码时重试（限流、服务端临时问题）
+_RETRYABLE = {429, 500, 502, 503, 504}
+
+
+class RateLimitError(RuntimeError):
+    """接口限流（rpm/tpm 耗尽）。"""
+
+
+def _post_with_retry(url: str, payload: dict[str, Any], headers: dict[str, str],
+                     max_attempts: int = 5) -> dict[str, Any]:
+    """带指数退避的请求。专门处理中转站的 rpm/tpm 限流。"""
+    import time
+
+    last_err = ""
+    for attempt in range(max_attempts):
+        try:
+            with make_client(url, timeout=120) as client:
+                r = client.post(url, json=payload, headers=headers)
+        except Exception as e:  # noqa: BLE001  网络层异常也重试
+            last_err = f"{type(e).__name__}: {e}"[:200]
+            if attempt < max_attempts - 1:
+                time.sleep(min(2 ** attempt, 20))
+                continue
+            raise RuntimeError(f"AI 接口连接失败：{last_err}") from e
+
+        if r.status_code == 200:
+            return r.json()
+
+        last_err = f"HTTP {r.status_code}: {r.text[:200]}"
+        if r.status_code not in _RETRYABLE:
+            raise RuntimeError(f"AI 接口错误 {last_err}")
+
+        if attempt == max_attempts - 1:
+            break
+
+        # 尊重服务端 Retry-After，否则指数退避
+        delay = min(2 ** attempt, 20)
+        ra = r.headers.get("retry-after")
+        if ra:
+            try:
+                delay = min(float(ra), 30)
+            except ValueError:
+                pass
+        time.sleep(delay)
+
+    if "429" in last_err:
+        raise RateLimitError(f"接口限流，重试 {max_attempts} 次仍失败：{last_err}")
+    raise RuntimeError(f"AI 接口多次重试仍失败：{last_err}")
 
 
 def _clean(s: str) -> str:

@@ -150,16 +150,34 @@ NOISE_PATTERNS = [
     r"^arxiv:\d",                       # arXiv 水印
     r"^\s*\d+\s*$",                     # 纯页码
     r"^(preprint|under review|published as)",  # 预印本声明
+    # 页眉：形如 "2 Wang and Deng"（数字 + 小写开头的人名/短语）
+    # 注意不能误伤 "1 Introduction" 这类小节标题（首字母大写）
+    r"^\d{1,3}\s+[a-z][a-z .,\-]{2,40}$",
+    # 页眉的反向形式："Wang and Deng 2"
+    r"^[a-z][a-z .,\-]{2,40}\s+\d{1,3}$",
 ]
 
+# 常见的页眉/页脚片段（作者缩写、期刊名等）
+_HEADER_HINTS = (
+    "and deng", "et al.", "proceedings of", "conference on",
+    "journal of", "vol.", "no.", "pp.",
+)
 
-def _is_noise(text: str) -> bool:
-    low = text.strip().lower()
+
+def _is_noise(text: str, is_heading: bool = False) -> bool:
+    raw = text.strip()
+    low = raw.lower()
+    # 标题优先：像 "1 Introduction" 这类不应被页眉规则误杀
+    if is_heading and _detect_section(raw):
+        return False
     for pat in NOISE_PATTERNS:
         if re.search(pat, low):
             return True
     # 极短的纯符号/数字
-    if len(text.strip()) <= 2 and not re.search(r"[a-zA-Z\u4e00-\u9fa5]", text):
+    if len(raw) <= 2 and not re.search(r"[a-zA-Z\u4e00-\u9fa5]", raw):
+        return True
+    # 很短的片段里出现页眉特征词
+    if len(raw) <= 40 and any(h in low for h in _HEADER_HINTS) and not raw.endswith("."):
         return True
     return False
 
@@ -206,9 +224,12 @@ def parse_local(pdf_path: Path) -> list[dict[str, Any]]:
         nonlocal idx, current_section, pending_heading
         if not pending_heading:
             return
+
         text = pending_heading["text"].strip()
+        page_no = pending_heading["page"]
         pending_heading = None
-        if not text or _is_noise(text):
+
+        if not text or _is_noise(text, is_heading=True):
             return
         sec = _detect_section(text)
         if sec:
@@ -216,12 +237,10 @@ def parse_local(pdf_path: Path) -> list[dict[str, Any]]:
         segs.append({
             "idx": idx, "kind": "heading",
             "section": sec or current_section,
-            "source": text, "page": pending_heading_page,
+            "source": text, "page": page_no,
             "bbox": None,
         })
         idx += 1
-
-    pending_heading_page = 1
 
     # ---- 第二遍：逐页逐块 ----
     for pno, page in enumerate(doc, start=1):
@@ -265,7 +284,7 @@ def parse_local(pdf_path: Path) -> list[dict[str, Any]]:
             short_bold = is_bold and len(text) <= 90 and dominant >= body_size * 0.95
 
             if bigger or (short_bold and not text.rstrip().endswith(".")):
-                if _is_noise(text):
+                if _is_noise(text, is_heading=True):
                     continue
                 if pending_heading and pending_heading["page"] == pno \
                         and pending_heading["size"] == dominant:
@@ -274,7 +293,6 @@ def parse_local(pdf_path: Path) -> list[dict[str, Any]]:
                 else:
                     flush_heading()
                     pending_heading = {"text": text, "page": pno, "size": dominant}
-                    pending_heading_page = pno
                 continue
 
             # 正文：先 flush 掉未落盘的标题
