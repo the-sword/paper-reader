@@ -50,6 +50,7 @@ interface State {
   refreshAIConfig: () => Promise<void>
   loadEngines: () => Promise<void>
   setSelectedEngine: (name: string | null) => void
+  resetTranslations: () => void
 }
 
 /** 同时在飞的翻译请求上限（中转站常有 rpm 限流，默认保守取 2） */
@@ -242,6 +243,9 @@ export const useStore = create<State>((set, get) => ({
   },
 
   setSelectedEngine: (name) => set({ selectedEngine: name }),
+
+  /** 清空前端已加载的译文（用于重翻） */
+  resetTranslations: () => set({ translations: {}, inflight: new Set<string>() }),
 
   startParse: async (engine = 'auto') => {
     const doc = get().currentDoc

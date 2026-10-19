@@ -67,33 +67,38 @@ export default function ReadingView() {
     const side: 'source' | 'zh' = range.commonAncestorContainer.parentElement
       ?.closest('.zh-block') ? 'zh' : 'source'
 
+    // 只弹气泡，不自动翻译；由用户点「翻译」触发
     setTerm({
       x: rect.left + rect.width / 2,
       y: rect.top - 10,
       source: text,
-      loading: true,
+      loading: false,
       segmentId,
       side,
     })
+  }, [])
 
-    void (async () => {
-      try {
-        const r = await api.translateTerm(text, selectedEngine)
-        setTerm((cur) =>
-          cur && cur.source === text
-            ? { ...cur, text: r.text, engine: r.engine, latency: r.latency_ms,
-                cached: r.cached, loading: false }
-            : cur,
-        )
-      } catch (e) {
-        setTerm((cur) =>
-          cur && cur.source === text
-            ? { ...cur, loading: false, error: String(e).replace(/^Error:\s*/, '') }
-            : cur,
-        )
-      }
-    })()
-  }, [selectedEngine])
+  /** 手动触发划词翻译 */
+  const doTranslate = async () => {
+    const t = term
+    if (!t || t.text || t.loading) return
+    setTerm({ ...t, loading: true, error: undefined })
+    try {
+      const r = await api.translateTerm(t.source, selectedEngine)
+      setTerm((cur) =>
+        cur && cur.source === t.source
+          ? { ...cur, text: r.text, engine: r.engine, latency: r.latency_ms,
+              cached: r.cached, loading: false }
+          : cur,
+      )
+    } catch (e) {
+      setTerm((cur) =>
+        cur && cur.source === t.source
+          ? { ...cur, loading: false, error: String(e).replace(/^Error:\s*/, '') }
+          : cur,
+      )
+    }
+  }
 
   /** 高亮当前选区 */
   const doHighlight = async (color: string) => {
@@ -209,6 +214,41 @@ export default function ReadingView() {
   }, [segments, mode, scheduleFlush])
 
   // 按段落聚合标注，传给段落渲染
+  /** 重翻流程状态 */
+  const [retranslating, setRetranslating] = useState(false)
+  const [retransMsg, setRetransMsg] = useState('')
+
+  const doRetranslate = async () => {
+    if (!currentDoc) return
+    const engineName = selectedEngine || '自动'
+    if (!confirm(
+      `将清除本篇的全部译文缓存并用「${engineName}」重新翻译。\n\n`
+      + '标注和笔记不会受影响。继续？',
+    )) return
+
+    setRetranslating(true)
+    setRetransMsg('正在清除旧译文…')
+    const st = useStore.getState()
+    try {
+      // 第一步：清空缓存
+      const cleared = await api.retranslate(currentDoc.id, 'clear')
+      setRetransMsg(`已清除 ${cleared.cleared} 条，开始重翻…`)
+
+      // 第二步：清空前端已加载的译文，重新排队
+      st.resetTranslations()
+      const ids = translatable.map((x) => x.id)
+      if (ids.length) {
+        await st.translateQueue(ids, selectedEngine)
+      }
+      setRetransMsg('重翻完成')
+      await st.loadSegments(currentDoc.id)
+    } catch (e) {
+      setRetransMsg(`失败：${String(e).replace(/^Error:\s*/, '').slice(0, 80)}`)
+    } finally {
+      setRetranslating(false)
+    }
+  }
+
   const annBySegment = useMemo(() => {
     const m: Record<string, Array<{ id: string; color: string; side: string; comment: string | null }>> = {}
     for (const a of annotations) {
@@ -301,6 +341,23 @@ export default function ReadingView() {
             <div className="term-source">
               {term.source.length > 70 ? term.source.slice(0, 70) + '…' : term.source}
             </div>
+
+            {/* 未翻译：显示触发按钮，不自动请求 */}
+            {!term.loading && !term.text && !term.error && (
+              <div style={{ marginTop: 6 }}>
+                <button
+                  className="btn-primary"
+                  style={{ fontSize: 11, padding: '3px 10px' }}
+                  onClick={() => void doTranslate()}
+                >翻译</button>
+                <span style={{ fontSize: 10, color: 'var(--fg-muted)', marginLeft: 6 }}>
+                  {selectedEngine
+                    ? engines.find((e) => e.name === selectedEngine)?.label
+                    : '自动选择引擎'}
+                </span>
+              </div>
+            )}
+
             {term.loading && (
               <div className="term-result loading">翻译中…</div>
             )}
@@ -315,8 +372,16 @@ export default function ReadingView() {
               </>
             )}
             {!term.loading && term.error && (
-              <div className="term-result error">{term.error}</div>
+              <div className="term-result error">
+                {term.error}
+                <button
+                  className="btn-ghost"
+                  style={{ fontSize: 10, padding: '0 5px', marginLeft: 6 }}
+                  onClick={() => void doTranslate()}
+                >重试</button>
+              </div>
             )}
+
             <div className="term-actions">
               {[
                 ['#ffd400', '黄'],
@@ -410,6 +475,21 @@ export default function ReadingView() {
             if (all.length) void st.translateQueue(all, selectedEngine)
           }}
         >翻译全文</button>
+
+        <button
+          className="btn-ghost"
+          style={{ fontSize: 11 }}
+          disabled={retranslating}
+          title="清除本篇译文缓存并重新翻译（标注不受影响）"
+          onClick={() => void doRetranslate()}
+        >{retranslating ? '重翻中…' : '清除译文缓存并重翻'}</button>
+
+        {retransMsg && (
+          <div style={{
+            fontSize: 10, color: 'var(--fg-muted)', lineHeight: 1.5,
+            wordBreak: 'break-word',
+          }}>{retransMsg}</div>
+        )}
       </div>
     </div>
   )

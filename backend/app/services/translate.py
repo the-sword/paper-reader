@@ -314,6 +314,37 @@ def translate_segment(doc_id: str, segment_id: str, force: bool = False,
     }
 
 
+def clear_document_translations(doc_id: str) -> int:
+    """清除一篇文献的全部译文缓存，返回删除条数。
+
+    只删 translations，不动 segments 与 annotations：
+    标注锚定在段落上，译文重翻不影响任何标注。
+    """
+    with db() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) c FROM translations t
+               JOIN segments s ON s.id = t.segment_id
+               WHERE s.document_id=?""",
+            (doc_id,),
+        ).fetchone()
+        n = row["c"] if row else 0
+        conn.execute(
+            """DELETE FROM translations WHERE segment_id IN
+               (SELECT id FROM segments WHERE document_id=?)""",
+            (doc_id,),
+        )
+    return n
+
+
+def clear_all_translations() -> int:
+    """清除全部文献的译文缓存。"""
+    with db() as conn:
+        row = conn.execute("SELECT COUNT(*) c FROM translations").fetchone()
+        n = row["c"] if row else 0
+        conn.execute("DELETE FROM translations")
+    return n
+
+
 def cached_count(doc_id: str) -> int:
     with db() as conn:
         row = conn.execute(

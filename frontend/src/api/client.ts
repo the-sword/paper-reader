@@ -257,6 +257,11 @@ export const api = {
   // ---- AI 探活 ----
   probeAI: () => req<{ ok: boolean; latency_ms?: number; error?: string }>('/reading/config/ai/probe'),
 
+  retranslate: (docId: string, mode: 'clear' | 'retranslate', engine?: string | null, limit?: number) =>
+    req<{ ok: boolean; mode: string; cleared: number; translated: number; failed?: number }>(
+      `/reading/${docId}/retranslate`,
+      { method: 'POST', body: JSON.stringify({ mode, engine: engine || null, limit: limit ?? null }) }),
+
   // ---- 配置 ----
   getEngines: () => req<EngineStatus>('/reading/config/engines'),
   getAIConfig: () => req<AIConfig>('/reading/config/ai'),

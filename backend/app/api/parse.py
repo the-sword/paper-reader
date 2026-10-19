@@ -28,6 +28,19 @@ class ParseReq(BaseModel):
     engine: str = "auto"  # auto | mineru | local
 
 
+class RetranslateReq(BaseModel):
+    """重翻请求。
+
+    mode:
+      - clear   仅清除译文缓存
+      - retranslate  清除后立即重翻（同步返回，前端已支持分批）
+    engine: 指定引擎，空则按优先级自动
+    """
+    mode: str = "clear"
+    engine: str | None = None
+    limit: int | None = None   # 仅重翻前 N 段，便于快速尝试验证
+
+
 class TranslateReq(BaseModel):
     segment_ids: list[str]
     force: bool = False
@@ -154,6 +167,58 @@ def translate_segments(doc_id: str, body: TranslateReq) -> dict[str, Any]:
         except Exception as e:  # noqa: BLE001
             errors.append({"segment_id": sid, "error": str(e)})
     return {"results": results, "errors": errors}
+
+
+@router.post("/{doc_id}/retranslate")
+def retranslate_document(doc_id: str, body: RetranslateReq) -> dict[str, Any]:
+    """清除该文档译文缓存，可选立即重翻。
+
+    标注完全不受影响：标注锚定在 segments 上，与 translations 无耦合。
+    """
+    if not library.get_document(doc_id):
+        raise HTTPException(404, "文献不存在")
+    if body.mode not in ("clear", "retranslate"):
+        raise HTTPException(400, "mode 只能是 clear 或 retranslate")
+
+    cleared = translate.clear_document_translations(doc_id)
+
+    if body.mode == "clear":
+        return {"ok": True, "mode": "clear", "cleared": cleared, "translated": 0}
+
+    # 立即重翻：取需要翻译的段落
+    segs = parser.list_segments(doc_id)
+    targets = [x["id"] for x in segs if x["kind"] in translate.TRANSLATABLE]
+    if body.limit is not None:
+        targets = targets[: max(0, body.limit)]
+    if not targets:
+        return {"ok": True, "mode": "retranslate", "cleared": cleared,
+                "translated": 0, "note": "没有可翻译的段落"}
+
+    results, errors = [], []
+    for sid in targets:
+        try:
+            results.append(translate.translate_segment(doc_id, sid, engine=body.engine))
+        except Exception as e:  # noqa: BLE001
+            errors.append({"segment_id": sid, "error": str(e)[:200]})
+            # 连续失败就停，避免刷爆限流
+            if len(errors) >= 3:
+                break
+
+    return {
+        "ok": True,
+        "mode": "retranslate",
+        "cleared": cleared,
+        "translated": len(results),
+        "failed": len(errors),
+        "errors": errors[:3],
+    }
+
+
+@router.post("/retranslate/all")
+def clear_all_translations() -> dict[str, Any]:
+    """清除全部文献的译文缓存（用于统一刷新翻译质量）。"""
+    n = translate.clear_all_translations()
+    return {"ok": True, "cleared": n}
 
 
 # ---------------------------------------------------------------------------
