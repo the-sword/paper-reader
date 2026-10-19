@@ -107,6 +107,17 @@ export interface EngineTestResult {
   latency_ms?: number
   error?: string
 }
+export interface ArxivItem {
+  arxiv_id: string
+  title: string
+  authors: string[]
+  summary: string
+  published: string
+  pdf_url: string
+  abs_url: string
+  doi: string | null
+  categories: string[]
+}
 export interface Reference {
   no: number
   idx: number
@@ -213,6 +224,27 @@ export const api = {
     }>(
       `/reading/${docId}/translate`,
       { method: 'POST', body: JSON.stringify({ segment_ids: segmentIds, force, engine: engine || null }) }),
+
+  // ---- arXiv ----
+  arxivSearch: (query: string, field = 'all', limit = 10) =>
+    req<{ count: number; results: ArxivItem[] }>('/arxiv/search',
+      { method: 'POST', body: JSON.stringify({ query, field, limit }) }),
+  arxivByDoi: (doi: string) =>
+    req<{
+      matched: ArxivItem | null
+      meta: { doi: string; title: string; authors: string[]; year: number | null; container: string } | null
+      score: number
+      candidates: ArxivItem[]
+    }>('/arxiv/by-doi', { method: 'POST', body: JSON.stringify({ doi }) }),
+  arxivImport: (arxivId: string, opts?: { title?: string; authors?: string[]; folderId?: string }) =>
+    req<{ ok: boolean; duplicated: boolean; document: { id: string; title: string; page_count: number; authors: string | null } }>(
+      '/arxiv/import',
+      { method: 'POST', body: JSON.stringify({
+        arxiv_id: arxivId,
+        title: opts?.title ?? null,
+        authors: opts?.authors ?? null,
+        folder_id: opts?.folderId ?? null,
+      }) }),
 
   // ---- 参考文献 ----
   getReferences: (docId: string) =>

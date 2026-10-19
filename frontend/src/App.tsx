@@ -4,6 +4,7 @@ import DocumentList from './components/DocumentList'
 import PdfViewer from './components/PdfViewer'
 import ReadingView from './components/ReadingView'
 import SettingsDialog from './components/SettingsDialog'
+import ArxivPanel from './components/ArxivPanel'
 import RightPanel from './components/RightPanel'
 import Resizer from './components/Resizer'
 import { useStore } from './stores/useStore'
@@ -43,6 +44,7 @@ export default function App() {
   const [showSidebar, setShowSidebar] = useState(true)
   const [showNotes, setShowNotes] = useState(true)
   const [showSettings, setShowSettings] = useState(false)
+  const [showArxiv, setShowArxiv] = useState(false)
   const [view, setView] = useState<ViewMode>('pdf')
 
   const mainRef = useRef<HTMLElement>(null)
@@ -176,6 +178,13 @@ export default function App() {
           <button
             className="btn-ghost"
             style={{ padding: '4px 8px' }}
+            title="从 arXiv 搜索并下载论文"
+            onClick={() => setShowArxiv(true)}
+          >arXiv</button>
+
+          <button
+            className="btn-ghost"
+            style={{ padding: '4px 8px' }}
             title={aiReady ? 'AI 已配置' : 'AI 未配置，点击设置'}
             onClick={() => setShowSettings(true)}
           >⚙{aiReady ? '' : '!'}</button>
@@ -227,6 +236,7 @@ export default function App() {
       </div>
 
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
+      {showArxiv && <ArxivPanel onClose={() => setShowArxiv(false)} />}
 
       {error && (
         <div style={{
