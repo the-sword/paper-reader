@@ -208,6 +208,44 @@ AI 接口也可以在界面 ⚙ 里配置，存本地数据库，优先级高于
 
 ---
 
+## 一键部署到 VPS
+
+单用户轻量方案：**不需要 root、docker、nginx/caddy**。数据与代码分离，systemd 常驻（开机自启 + 崩溃自拉起）。
+
+```bash
+# 上传到 VPS 后
+./deploy.sh --dry-run              # 预览部署参数，不会实际执行
+./deploy.sh                        # 完整部署（venv + 构建 + systemd + 启动）
+./deploy.sh --token '随机长口令'    # 设置访问口令（公网访问必设）
+./deploy.sh --status               # 查看服务状态
+./deploy.sh --logs                 # 跟踪日志
+./deploy.sh --uninstall            # 卸载服务（数据保留）
+```
+
+| 特性 | 说明 |
+|---|---|
+| 环境隔离 | 自动建 venv；缺 `python3-venv` 时自动降级系统 Python 并检测依赖 |
+| 配置安全 | 覆盖 `.env` 前自动备份为 `.env.bak.<时间戳>` |
+| 密钥生成 | 自动生成 `PAPER_READER_SECRET`（加密库中 API Key） |
+| 常驻 | systemd user service + `enable-linger`（未登录也运行） |
+| 鉴权 | 默认只监听 127.0.0.1；公网访问需 `--token` |
+
+**外网访问两种方式**：
+
+```bash
+# A. SSH 隧道（最省事，无需防火墙）
+ssh -N -L 8787:127.0.0.1:8787 user@你的VPS
+
+# B. 公网直连（务必先设口令）
+./deploy.sh --token '一串随机长口令'
+sudo ufw allow 8787/tcp
+HOST=0.0.0.0 ./deploy.sh
+```
+
+**注意**：`--token` 会写入 `.env` 并自动重启服务使其生效。容器环境若无 systemd，自动降级为后台进程模式。
+
+---
+
 ## 迁移到另一台机器
 
 ```bash

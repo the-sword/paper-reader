@@ -1,0 +1,361 @@
+#!/usr/bin/env bash
+# ============================================================================
+# Paper Reader 一键轻量化部署到 VPS
+#
+# 用法（在 VPS 上，普通用户即可，不需要 root）：
+#
+#   ./deploy.sh                完整部署（venv + 前端构建 + systemd + 启动）
+#   ./deploy.sh --no-build     跳过前端构建（复用已有 dist/）
+#   ./deploy.sh --status       查看服务状态
+#   ./deploy.sh --logs         跟踪日志
+#   ./deploy.sh --uninstall    卸载服务（保留数据）
+#   ./deploy.sh --token <t>    设置访问口令（推荐 VPS 必须设置）
+#
+# 设计目标：
+#   1. 单用户轻量：不需要 root、不需要 docker、不需要 nginx/caddy
+#   2. 数据与代码分离：数据在 LIB_ROOT，代码随便删
+#   3. 常驻：systemd user service，开机自启、崩溃自拉起
+#   4. 安全：默认只监听 127.0.0.1，公网访问需显式 --token + 防火墙
+# ============================================================================
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV="$ROOT/backend/.venv"
+SERVICE_NAME="paper-reader"
+LOG_DIR="$HOME/.local/state/paper-reader"
+
+# 默认配置（可用环境变量覆盖）
+LIB_ROOT="${LIB_ROOT:-$HOME/paper-reader}"
+HOST="${HOST:-127.0.0.1}"
+PORT="${PORT:-8787}"
+AUTH_TOKEN="${AUTH_TOKEN:-}"
+
+DO_BUILD=1
+DRY_RUN=0
+ACTION=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-build)   DO_BUILD=0 ;;
+    --token)      [ $# -ge 2 ] || die "--token 需要参数"; AUTH_TOKEN="$2"; ACTION="set-token"; shift ;;
+    --status|--logs|--uninstall|--help|-h) ACTION="$1" ;;
+    --dry-run) DRY_RUN=1 ;;
+    *) echo "未知参数: $1"; exit 1 ;;
+  esac
+  shift
+done
+ACTION="${ACTION:-deploy}"
+
+info()  { printf '\033[0;36m==>\033[0m %s\n' "$*"; }
+ok()    { printf '\033[0;32m ✓\033[0m %s\n' "$*"; }
+warn()  { printf '\033[1;33m !\033[0m %s\n' "$*"; }
+die()   { printf '\033[0;31m ✗\033[0m %s\n' "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# 环境检查
+# ---------------------------------------------------------------------------
+check_env() {
+  command -v python3 >/dev/null || die "需要 python3"
+  python3 --version | grep -qE '3\.(9|1[0-9])' || warn "建议 Python 3.9+，当前: $(python3 --version)"
+
+  if command -v systemctl >/dev/null; then
+    # 检测是否支持 user 级别的 systemd（部分容器环境不支持）
+    if systemctl --user list-units >/dev/null 2>&1; then
+      HAVE_SYSTEMD_USER=1
+    else
+      HAVE_SYSTEMD_USER=0
+      warn "systemd user 服务不可用（容器环境？），将使用后台进程模式"
+    fi
+  else
+    HAVE_SYSTEMD_USER=0
+    warn "未检测到 systemd，将使用后台进程模式"
+  fi
+
+  command -v npm >/dev/null || { DO_BUILD=0; warn "未检测到 npm，跳过前端构建（需已有 dist/）"; }
+}
+
+# ---------------------------------------------------------------------------
+# 1. Python 虚拟环境 + 依赖
+# ---------------------------------------------------------------------------
+setup_python() {
+  info "准备 Python 环境"
+
+  # 已存在 venv 且可用则复用
+  if [ -x "$VENV/bin/python" ] && "$VENV/bin/python" -c "import fastapi" 2>/dev/null; then
+    ok "复用已有 venv"
+    return
+  fi
+
+  if [ ! -d "$VENV" ]; then
+    if python3 -m venv "$VENV" 2>/dev/null; then
+      :
+    else
+      warn "创建 venv 失败（缺 python3-venv？），尝试系统 Python 模式"
+      warn "如需隔离环境可执行: sudo apt install python3-venv"
+      USE_SYSTEM_PY=1
+      return
+    fi
+  fi
+
+  "$VENV/bin/pip" install -q --upgrade pip
+  "$VENV/bin/pip" install -q -r "$ROOT/backend/requirements.txt" \
+    || die "依赖安装失败"
+  ok "Python 依赖就绪 ($(du -sh "$VENV" | cut -f1))"
+}
+
+# 系统 Python 模式下确认依赖可用
+check_system_python() {
+  [ "${USE_SYSTEM_PY:-0}" = "1" ] || return 0
+  local miss=()
+  for m in fastapi uvicorn httpx pypdf fitz cryptography; do
+    python3 -c "import $m" 2>/dev/null || miss+=("$m")
+  done
+  if [ ${#miss[@]} -gt 0 ]; then
+    info "安装缺失依赖: ${miss[*]}"
+    pip3 install -q -r "$ROOT/backend/requirements.txt" \
+      || die "依赖安装失败，请手动执行: pip3 install -r backend/requirements.txt"
+  fi
+  ok "系统 Python 依赖就绪"
+}
+
+# ---------------------------------------------------------------------------
+# 2. 前端构建
+# ---------------------------------------------------------------------------
+build_frontend() {
+  [ "$DO_BUILD" = "1" ] || { info "跳过前端构建"; return; }
+  command -v npm >/dev/null || { warn "无 npm，跳过构建"; return; }
+
+  info "构建前端"
+  local dist="$ROOT/frontend/dist"
+  if [ ! -d "$ROOT/frontend/node_modules" ]; then
+    (cd "$ROOT/frontend" && npm ci --silent) || (cd "$ROOT/frontend" && npm install --silent) \
+      || die "前端依赖安装失败"
+  fi
+  (cd "$ROOT/frontend" && npm run build >/dev/null) || die "前端构建失败"
+  [ -f "$dist/index.html" ] || die "构建产物缺失: dist/index.html"
+  ok "前端构建完成 ($(du -sh "$dist" | cut -f1))"
+}
+
+# ---------------------------------------------------------------------------
+# 3. 数据目录 + 配置
+# ---------------------------------------------------------------------------
+setup_data() {
+  info "准备数据目录: $LIB_ROOT"
+  mkdir -p "$LIB_ROOT"/{files,parsed,backups}
+
+  if [ ! -f "$ROOT/backend/.env" ]; then
+    cp "$ROOT/backend/.env.example" "$ROOT/backend/.env"
+  else
+    # 覆盖前先备份，避免误覆盖开发环境配置
+    cp "$ROOT/backend/.env" "$ROOT/backend/.env.bak.$(date +%Y%m%d%H%M%S)"
+    info "已备份原配置到 backend/.env.bak.*"
+  fi
+  # 写回部署参数（保留用户已填的密钥）
+  python3 - "$ROOT/backend/.env" "$LIB_ROOT" "$HOST" "$PORT" "$AUTH_TOKEN" <<'PY'
+import sys
+path, lib, host, port, token = sys.argv[1:6]
+kv = {}
+for line in open(path, encoding="utf-8"):
+    line = line.strip()
+    if line and not line.startswith("#") and "=" in line:
+        k, v = line.split("=", 1)
+        kv[k.strip()] = v.strip()
+kv["LIB_ROOT"], kv["HOST"], kv["PORT"] = lib, host, port
+if token:
+    kv["AUTH_TOKEN"] = token
+# 必须项兜底
+kv.setdefault("PAPER_READER_SECRET", "")
+if not kv["PAPER_READER_SECRET"]:
+    import secrets
+    kv["PAPER_READER_SECRET"] = secrets.token_urlsafe(32)
+    print("  已生成 PAPER_READER_SECRET（用于加密库中 API Key）")
+with open(path, "w", encoding="utf-8") as f:
+    for k, v in kv.items():
+        f.write(f"{k}={v}\n")
+PY
+  ok "配置已写入 backend/.env"
+}
+
+# ---------------------------------------------------------------------------
+# 4. 启动（systemd user service 优先，否则后台进程）
+# ---------------------------------------------------------------------------
+install_service() {
+  mkdir -p "$LOG_DIR"
+
+  # 根据 venv / 系统 Python 选择解释器
+  if [ "${USE_SYSTEM_PY:-0}" = "1" ]; then
+    PY_BIN="$(command -v python3)"
+  else
+    PY_BIN="$VENV/bin/python"
+  fi
+
+  if [ "$HAVE_SYSTEMD_USER" = "1" ]; then
+    info "安装 systemd user service"
+    local unit_dir="$HOME/.config/systemd/user"
+    mkdir -p "$unit_dir"
+    cat > "$unit_dir/$SERVICE_NAME.service" <<EOF
+[Unit]
+Description=Paper Reader - personal paper reading server
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$ROOT/backend
+ExecStart=$PY_BIN -m uvicorn app.main:app --host $HOST --port $PORT
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:$LOG_DIR/server.log
+StandardError=append:$LOG_DIR/server.log
+
+[Install]
+WantedBy=default.target
+EOF
+    systemctl --user daemon-reload
+    systemctl --user enable "$SERVICE_NAME" >/dev/null 2>&1
+    systemctl --user restart "$SERVICE_NAME"
+    # 让用户服务在未登录时也能运行（VPS 必备）
+    if command -v loginctl >/dev/null; then
+      loginctl enable-linger "$(whoami)" >/dev/null 2>&1 || true
+    fi
+    ok "systemd 服务已安装并启动（开机自启）"
+  else
+    warn "使用后台进程模式（无开机自启、无崩溃自拉起）"
+    pkill -f "uvicorn app.main:app" 2>/dev/null || true
+    sleep 1
+    setsid nohup "${PY_BIN:-python3}" -m uvicorn app.main:app \
+      --host "$HOST" --port "$PORT" \
+      > "$LOG_DIR/server.log" 2>&1 < /dev/null &
+    ok "后台进程已启动"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# 健康检查
+# ---------------------------------------------------------------------------
+wait_ready() {
+  info "等待服务就绪"
+  for _ in $(seq 1 20); do
+    if curl -fsS --max-time 3 "http://$HOST:$PORT/api/system/health" >/dev/null 2>&1; then
+      ok "服务已就绪"
+      return 0
+    fi
+    sleep 1
+  done
+  warn "服务未在预期时间内响应，请查看日志: $LOG_DIR/server.log"
+  return 1
+}
+
+show_summary() {
+  local url="http://$HOST:$PORT"
+  cat <<EOF
+
+==================== 部署完成 ====================
+  本地地址:   $url
+  数据目录:   $LIB_ROOT
+  日志:       $LOG_DIR/server.log
+  配置:       $ROOT/backend/.env
+
+  管理命令:
+    $0 --status      查看状态
+    $0 --logs        跟踪日志
+    $0 --token <t>   修改访问口令
+    $0 --uninstall   卸载服务（数据保留）
+
+EOF
+  if [ "$HOST" = "127.0.0.1" ]; then
+    cat <<EOF
+  当前仅监听本机。如需从外网访问，二选一：
+
+  A. SSH 隧道（最省事，无需防火墙配置）
+     ssh -N -L $PORT:127.0.0.1:$PORT user@你的VPS
+     然后浏览器打开 http://127.0.0.1:$PORT
+
+  B. 公网访问（务必先设置口令）
+     $0 --token '一串随机长口令'
+     sudo ufw allow $PORT/tcp
+     HOST=0.0.0.0 $0
+EOF
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# 子命令
+# ---------------------------------------------------------------------------
+case "$ACTION" in
+  deploy)
+    check_env
+    if [ "$DRY_RUN" = "1" ]; then
+      cat <<EOF
+==================== 部署预览（不会实际执行）====================
+  项目目录:   $ROOT
+  数据目录:   $LIB_ROOT
+  监听地址:   $HOST:$PORT
+  访问口令:   ${AUTH_TOKEN:+已设置}${AUTH_TOKEN:-未设置（仅本机访问）}
+  Python:     ${USE_SYSTEM_PY:-自动检测}
+  前端构建:   $([ "$DO_BUILD" = "1" ] && echo 是 || echo 跳过)
+  服务方式:   systemd user service
+  日志目录:   $LOG_DIR
+  配置文件:   $ROOT/backend/.env
+
+  实际执行请去掉 --dry-run
+=================================================================
+EOF
+      exit 0
+    fi
+    setup_python
+    check_system_python
+    build_frontend
+    setup_data
+    install_service
+    wait_ready || true
+    show_summary
+    ;;
+  set-token)
+    [ -n "$AUTH_TOKEN" ] || die "口令不能为空"
+    python3 - "$ROOT/backend/.env" "$AUTH_TOKEN" <<'PYINNER'
+import sys
+path, token = sys.argv[1], sys.argv[2]
+kv = {}
+for line in open(path, encoding="utf-8"):
+    line = line.strip()
+    if line and not line.startswith("#") and "=" in line:
+        k, v = line.split("=", 1)
+        kv[k.strip()] = v.strip()
+kv["AUTH_TOKEN"] = token
+with open(path, "w", encoding="utf-8") as f:
+    for k, v in kv.items():
+        f.write(f"{k}={v}\n")
+PYINNER
+    ok "口令已写入 backend/.env"
+    if systemctl --user restart "$SERVICE_NAME" 2>/dev/null; then
+      sleep 2
+      if curl -fsS --max-time 5 "http://$HOST:$PORT/api/system/health" >/dev/null 2>&1; then
+        ok "服务已重启，口令生效"
+      else
+        warn "服务已重启但未响应，请检查日志"
+      fi
+    else
+      warn "systemd 不可用，请手动重启服务"
+    fi
+    ;;
+
+  --status)
+    if systemctl --user is-active "$SERVICE_NAME" >/dev/null 2>&1; then
+      systemctl --user status "$SERVICE_NAME" --no-pager
+    else
+      pgrep -af "uvicorn app.main:app" || echo "未运行（systemd user service 不可用或未安装）"
+    fi
+    ;;
+  --logs)
+    tail -n 100 -f "$LOG_DIR/server.log" 2>/dev/null || echo "无日志"
+    ;;
+  --uninstall)
+    systemctl --user disable --now "$SERVICE_NAME" 2>/dev/null || true
+    rm -f "$HOME/.config/systemd/user/$SERVICE_NAME.service"
+    pkill -f "uvicorn app.main:app" 2>/dev/null || true
+    systemctl --user daemon-reload 2>/dev/null || true
+    ok "服务已卸载（数据保留在 $LIB_ROOT）"
+    ;;
+  --help|-h)
+    sed -n '2,20p' "$0"
+    ;;
+esac
