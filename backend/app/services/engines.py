@@ -119,7 +119,7 @@ def get_engine_order() -> list[str]:
                 return [str(x) for x in order]
         except Exception:
             pass
-    return ["baidu", "google", "bing", "deepl", "ai"]
+    return ["baidu", "tencent", "volcano", "google", "bing", "deepl", "ai"]
 
 
 def set_engine_order(order: list[str]) -> None:
@@ -485,20 +485,14 @@ class AIEngine:
 _ENGINE_HINTS = {
     "baidu": "推荐。百度翻译开放平台申请 AppID 与密钥，选择「领域翻译」产品，"
              "学术论文领域每月 50 万字符免费，QPS 10",
+    "tencent": "推荐。腾讯云控制台开通机器翻译，获取 SecretId/SecretKey，"
+               "每月 500 万字符免费（额度最大）",
+    "volcano": "火山引擎控制台开通机器翻译，获取 AK/SK，每月 200 万字符免费",
     "google": "无需配置。非官方端点，可能被限流或需要代理，仅作备用",
     "bing": "无需配置。非官方端点，token 可能失效，仅作备用",
     "deepl": "DeepL 官网申请 API Key，免费版每月 50 万字符，服务器在境外",
     "ai": "质量最好但较慢（单段约 5-10 秒）。适合全文精翻，不适合划词",
 }
-
-ENGINES: dict[str, Any] = {
-    "baidu": BaiduEngine(),
-    "google": GoogleEngine(),
-    "bing": BingEngine(),
-    "deepl": DeepLEngine(),
-    "ai": AIEngine(),
-}
-
 
 def get_engine(name: str):
     return ENGINES.get(name)
@@ -596,3 +590,326 @@ def test_engine(name: str) -> dict[str, Any]:
         }
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "engine": name, "error": str(e)[:300]}
+
+
+# ---------------------------------------------------------------------------
+# 腾讯云机器翻译（TC3-HMAC-SHA256 签名）
+# ---------------------------------------------------------------------------
+
+class TencentEngine:
+    name = "tencent"
+    label = "腾讯云机器翻译"
+    HOST = "tmt.tencentcloudapi.com"
+    SERVICE = "tmt"
+    VERSION = "2018-03-21"
+    ACTION = "TextTranslate"
+
+    LANGS = {"zh": "zh", "en": "en", "ja": "ja", "ko": "ko", "fr": "fr", "de": "de"}
+
+    def configured(self) -> bool:
+        c = get_engine_config(self.name)
+        return bool(c.get("appid") and c.get("appkey"))
+
+    def _sign(self, secret_id: str, secret_key: str, payload: str,
+              timestamp: int) -> dict[str, str]:
+        """构造 TC3-HMAC-SHA256 签名所需的 header。"""
+        import datetime as _dt
+
+        date = _dt.datetime.fromtimestamp(timestamp, _dt.timezone.utc).strftime("%Y-%m-%d")
+
+        # 1) 规范化请求
+        content_type = "application/json; charset=utf-8"
+        canonical_headers = f"content-type:{content_type}\nhost:{self.HOST}\n"
+        signed_headers = "content-type;host"
+        hashed_payload = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        canonical_request = (
+            f"POST\n/\n\n{canonical_headers}\n{signed_headers}\n{hashed_payload}"
+        )
+
+        # 2) 待签名字符串
+        credential_scope = f"{date}/{self.SERVICE}/tc3_request"
+        string_to_sign = (
+            "TC3-HMAC-SHA256\n"
+            f"{timestamp}\n"
+            f"{credential_scope}\n"
+            f"{hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()}"
+        )
+
+        # 3) 逐层派生密钥并计算签名
+        import hmac as _hmac
+
+        def _digest(key: bytes, msg: str) -> bytes:
+            return _hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+        secret_date = _digest(f"TC3{secret_key}".encode("utf-8"), date)
+        secret_service = _digest(secret_date, self.SERVICE)
+        secret_signing = _digest(secret_service, "tc3_request")
+        signature = _hmac.new(
+            secret_signing, string_to_sign.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+
+        authorization = (
+            f"TC3-HMAC-SHA256 Credential={secret_id}/{credential_scope}, "
+            f"SignedHeaders={signed_headers}, Signature={signature}"
+        )
+        return {
+            "Authorization": authorization,
+            "Content-Type": content_type,
+            "Host": self.HOST,
+            "X-TC-Action": self.ACTION,
+            "X-TC-Version": self.VERSION,
+            "X-TC-Timestamp": str(timestamp),
+        }
+
+    def translate(self, text: str, src: str = "en", dst: str = "zh") -> EngineResult:
+        import json as _json
+        import time as _time
+
+        c = get_engine_config(self.name)
+        secret_id, secret_key = c.get("appid"), c.get("appkey")
+        if not secret_id or not secret_key:
+            raise EngineError("腾讯云未配置 SecretId/SecretKey", retryable=False)
+
+        region = c.get("region") or "ap-guangzhou"
+        payload = _json.dumps({
+            "SourceText": text,
+            "Source": self.LANGS.get(src, src),
+            "Target": self.LANGS.get(dst, dst),
+            "ProjectId": 0,
+        }, ensure_ascii=False)
+
+        ts = int(_time.time())
+        headers = self._sign(secret_id, secret_key, payload, ts)
+        headers["X-TC-Region"] = region
+
+        t0 = _time.time()
+        try:
+            with make_client(f"https://{self.HOST}", timeout=30) as client:
+                r = client.post(f"https://{self.HOST}", headers=headers,
+                                content=payload.encode("utf-8"))
+        except Exception as e:  # noqa: BLE001
+            raise EngineError(f"腾讯云连接失败：{e}") from e
+
+        if r.status_code != 200:
+            raise EngineError(f"腾讯云 HTTP {r.status_code}: {r.text[:200]}")
+
+        body = r.json()
+        resp = body.get("Response") or {}
+        if resp.get("Error"):
+            err = resp["Error"]
+            code = err.get("Code", "")
+            msg = err.get("Message", "")
+            hint = _TENCENT_ERRORS.get(code)
+            raise EngineError(
+                f"腾讯云 {code}：{hint or msg}",
+                retryable=code in ("RequestLimitExceeded", "InternalError"),
+            )
+
+        out = resp.get("TargetText", "")
+        if not out:
+            raise EngineError("腾讯云返回为空")
+        return EngineResult(
+            text=out, engine=self.name,
+            latency_ms=int((_time.time() - t0) * 1000),
+            meta={"region": region},
+        )
+
+
+_TENCENT_ERRORS = {
+    "AuthFailure.SignatureFailure": "签名错误：请检查 SecretId/SecretKey 是否正确",
+    "AuthFailure.SecretIdNotFound": "SecretId 不存在：请到腾讯云控制台确认密钥",
+    "AuthFailure.TokenFailure": "临时凭证 Token 无效",
+    "UnauthorizedOperation": "未授权：请确认已开通机器翻译服务",
+    "FailedOperation.NoFreeAmount": "免费额度已用完，请充值",
+    "FailedOperation.UserNotRegistered": "账号未开通机器翻译服务",
+    "RequestLimitExceeded": "请求频率超限，请降低调用速度",
+    "InternalError": "腾讯云内部错误，请重试",
+    "InvalidParameter": "参数错误",
+}
+
+
+# ---------------------------------------------------------------------------
+# 火山引擎翻译（V4 签名）
+# ---------------------------------------------------------------------------
+
+class VolcanoEngine:
+    name = "volcano"
+    label = "火山引擎翻译"
+    HOST = "translate.volcengineapi.com"
+    SERVICE = "translate"
+    VERSION = "2020-06-01"
+    ACTION = "TranslateText"
+    REGION = "cn-north-1"
+
+    LANGS = {"zh": "zh", "en": "en", "ja": "ja", "ko": "ko", "fr": "fr", "de": "de"}
+
+    def configured(self) -> bool:
+        c = get_engine_config(self.name)
+        return bool(c.get("appid") and c.get("appkey"))
+
+    @staticmethod
+    def _sha256_hex(data: bytes) -> str:
+        return hashlib.sha256(data).hexdigest()
+
+    @staticmethod
+    def _hmac(key: bytes, msg: str) -> bytes:
+        import hmac
+
+        return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+    @staticmethod
+    def _norm_uri(path: str) -> str:
+        from urllib.parse import quote
+
+        if not path:
+            return "/"
+        return quote(path, safe="/-_.~")
+
+    @staticmethod
+    def _norm_query(params: dict[str, str]) -> str:
+        from urllib.parse import quote
+
+        items = sorted(params.items())
+        return "&".join(
+            f"{quote(k, safe='-_.~')}={quote(v, safe='-_.~')}" for k, v in items
+        )
+
+    def _sign(self, ak: str, sk: str, query: str, payload: str,
+              timestamp: str) -> dict[str, str]:
+        """构造火山 V4 签名（HMAC-SHA256）。"""
+        import datetime as _dt
+
+        # 日期与时间（UTC）
+        dt = _dt.datetime.fromtimestamp(int(timestamp), _dt.timezone.utc)
+        x_date = dt.strftime("%Y%m%dT%H%M%SZ")
+        short_date = x_date[:8]
+
+        body_hash = self._sha256_hex(payload.encode("utf-8"))
+        content_type = "application/json"
+
+        canonical_headers = (
+            f"content-type:{content_type}\n"
+            f"host:{self.HOST}\n"
+            f"x-content-sha256:{body_hash}\n"
+            f"x-date:{x_date}\n"
+        )
+        signed_headers = "content-type;host;x-content-sha256;x-date"
+
+        canonical_request = "\n".join([
+            "POST",
+            self._norm_uri("/"),
+            self._norm_query(dict(
+                item.split("=", 1) for item in query.split("&") if "=" in item
+            )),
+            canonical_headers,
+            signed_headers,
+            body_hash,
+        ])
+
+        credential_scope = f"{short_date}/{self.REGION}/{self.SERVICE}/request"
+        string_to_sign = "\n".join([
+            "HMAC-SHA256",
+            x_date,
+            credential_scope,
+            self._sha256_hex(canonical_request.encode("utf-8")),
+        ])
+
+        k_date = self._hmac(sk.encode("utf-8"), short_date)
+        k_region = self._hmac(k_date, self.REGION)
+        k_service = self._hmac(k_region, self.SERVICE)
+        k_signing = self._hmac(k_service, "request")
+        import hmac as _hmac_mod
+
+        signature = _hmac_mod.new(
+            k_signing, string_to_sign.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+
+        authorization = (
+            f"HMAC-SHA256 Credential={ak}/{credential_scope}, "
+            f"SignedHeaders={signed_headers}, Signature={signature}"
+        )
+        return {
+            "Authorization": authorization,
+            "Content-Type": content_type,
+            "Host": self.HOST,
+            "X-Content-Sha256": body_hash,
+            "X-Date": x_date,
+        }
+
+    def translate(self, text: str, src: str = "en", dst: str = "zh") -> EngineResult:
+        import json as _json
+        import time as _time
+
+        c = get_engine_config(self.name)
+        ak, sk = c.get("appid"), c.get("appkey")
+        if not ak or not sk:
+            raise EngineError("火山引擎未配置 AK/SK", retryable=False)
+
+        # 火山 TranslateText 的文本以数组形式提交
+        payload = _json.dumps({
+            "TargetLanguage": "zh" if dst == "zh" else dst,
+            "TextList": [text],
+        }, ensure_ascii=False)
+
+        query = f"Action={self.ACTION}&Version={self.VERSION}"
+        ts = str(int(_time.time()))
+        headers = self._sign(ak, sk, query, payload, ts)
+
+        url = f"https://{self.HOST}/?{query}"
+        t0 = _time.time()
+        try:
+            with make_client(f"https://{self.HOST}", timeout=30) as client:
+                r = client.post(url, headers=headers, content=payload.encode("utf-8"))
+        except Exception as e:  # noqa: BLE001
+            raise EngineError(f"火山引擎连接失败：{e}") from e
+
+        if r.status_code != 200:
+            raise EngineError(f"火山引擎 HTTP {r.status_code}: {r.text[:200]}")
+
+        body = r.json()
+        meta = body.get("ResponseMetadata") or {}
+        if meta.get("Error"):
+            err = meta["Error"]
+            code = err.get("Code", "")
+            msg = err.get("Message", "")
+            hint = _VOLCANO_ERRORS.get(code)
+            raise EngineError(
+                f"火山引擎 {code}：{hint or msg}",
+                retryable="Limit" in code or "Internal" in code,
+            )
+
+        data = body.get("TranslationList") or body.get("Result") or []
+        if isinstance(data, dict):
+            data = data.get("TranslationList") or []
+        out = ""
+        if isinstance(data, list) and data:
+            first = data[0]
+            out = first.get("Translation") or first.get("translation") or ""
+        if not out:
+            raise EngineError("火山引擎返回为空")
+
+        return EngineResult(
+            text=out, engine=self.name,
+            latency_ms=int((_time.time() - t0) * 1000),
+        )
+
+
+_VOLCANO_ERRORS = {
+    "SignatureDoesNotMatch": "签名错误：请检查 AK/SK 是否正确、本机时间是否准确",
+    "InvalidAccessKey": "AK 无效：请到火山控制台确认",
+    "InvalidAuthorization": "授权信息无效",
+    "FlowLimitExceeded": "请求频率超限，请降低调用速度",
+    "QuotaExceeded": "额度已用完",
+    "AccessDenied": "无权限：请确认已开通机器翻译服务",
+}
+
+
+ENGINES: dict[str, Any] = {
+    "baidu": BaiduEngine(),
+    "tencent": TencentEngine(),
+    "volcano": VolcanoEngine(),
+    "google": GoogleEngine(),
+    "bing": BingEngine(),
+    "deepl": DeepLEngine(),
+    "ai": AIEngine(),
+}

@@ -155,7 +155,7 @@ function EnginesTab() {
                   onClick={() => void move(i, -1)} title="上移">↑</button>
                 <button className="btn-ghost" style={{ fontSize: 11, padding: '2px 6px' }}
                   onClick={() => void move(i, 1)} title="下移">↓</button>
-                {(e.name === 'baidu' || e.name === 'deepl') && (
+                {['baidu', 'tencent', 'volcano', 'deepl'].includes(e.name) && (
                   <button className="btn-ghost" style={{ fontSize: 11, padding: '2px 6px' }}
                     onClick={() => setEditing(editing === e.name ? null : e.name)}>配置</button>
                 )}
@@ -220,12 +220,13 @@ function EngineConfigForm({
   const save = async () => {
     setMsg('')
     try {
-      await api.saveEngineConfig(name, {
+      const payload: Parameters<typeof api.saveEngineConfig>[1] = {
         ...(appid.trim() ? { appid: appid.trim() } : {}),
         ...(appkey.trim() ? { appkey: appkey.trim() } : {}),
-        domain,
         region,
-      })
+      }
+      if (name === 'baidu') payload.domain = domain
+      await api.saveEngineConfig(name, payload)
       setMsg('已保存')
       setTimeout(onSaved, 500)
     } catch (e) {
@@ -262,6 +263,62 @@ function EngineConfigForm({
             申请地址：<a href="https://fanyi-api.baidu.com/product/12" target="_blank"
               rel="noreferrer" style={{ color: 'var(--accent)' }}>百度翻译开放平台 · 领域翻译</a>
             <br />选择「学术论文」或「信息技术」领域，每月 50 万字符免费。
+          </div>
+        </>
+      )}
+
+      {name === 'tencent' && (
+        <>
+          <div style={{ marginBottom: 8 }}>
+            <label style={labelStyle}>SecretId</label>
+            <input value={appid} onChange={(e) => setAppid(e.target.value)}
+              placeholder="AKID...（留空不修改）" style={inputStyle} />
+          </div>
+          <div style={{ marginBottom: 8 }}>
+            <label style={labelStyle}>SecretKey</label>
+            <input type="password" value={appkey} onChange={(e) => setAppkey(e.target.value)}
+              placeholder="留空不修改" style={inputStyle} />
+          </div>
+          <div style={{ marginBottom: 8 }}>
+            <label style={labelStyle}>地域 Region</label>
+            <select value={region} onChange={(e) => setRegion(e.target.value)} style={inputStyle}>
+              <option value="ap-guangzhou">华南地区（广州）</option>
+              <option value="ap-beijing">华北地区（北京）</option>
+              <option value="ap-shanghai">华东地区（上海）</option>
+              <option value="ap-chengdu">西南地区（成都）</option>
+              <option value="ap-hongkong">港澳台地区（香港）</option>
+            </select>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 8, lineHeight: 1.5 }}>
+            申请地址：
+            <a href="https://console.cloud.tencent.com/cam/capi" target="_blank"
+              rel="noreferrer" style={{ color: 'var(--accent)' }}>
+              腾讯云 API 密钥管理
+            </a>
+            <br />需同时在「机器翻译」控制台开通服务。每月 500 万字符免费（额度最大）。
+          </div>
+        </>
+      )}
+
+      {name === 'volcano' && (
+        <>
+          <div style={{ marginBottom: 8 }}>
+            <label style={labelStyle}>Access Key (AK)</label>
+            <input value={appid} onChange={(e) => setAppid(e.target.value)}
+              placeholder="AKLT...（留空不修改）" style={inputStyle} />
+          </div>
+          <div style={{ marginBottom: 8 }}>
+            <label style={labelStyle}>Secret Key (SK)</label>
+            <input type="password" value={appkey} onChange={(e) => setAppkey(e.target.value)}
+              placeholder="留空不修改" style={inputStyle} />
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 8, lineHeight: 1.5 }}>
+            申请地址：
+            <a href="https://console.volcengine.com/iam/keymanage/" target="_blank"
+              rel="noreferrer" style={{ color: 'var(--accent)' }}>
+              火山引擎密钥管理
+            </a>
+            <br />需开通「机器翻译」服务。每月 200 万字符免费。
           </div>
         </>
       )}
