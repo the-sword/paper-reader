@@ -205,14 +205,26 @@ function EngineConfigForm({
   const [appid, setAppid] = useState('')
   const [appkey, setAppkey] = useState('')
   const [domain, setDomain] = useState('academic')
-  const [region, setRegion] = useState('api-free')
+  // 各引擎的 region 语义不同：
+  //   腾讯 = 云地域（ap-guangzhou）
+  //   DeepL = 套餐（api-free / api-pro）
+  const REGION_DEFAULT: Record<string, string> = {
+    tencent: 'ap-guangzhou',
+    deepl: 'api-free',
+  }
+  const [region, setRegion] = useState(REGION_DEFAULT[name] ?? '')
   const [cfgLoaded, setCfgLoaded] = useState(false)
   const [msg, setMsg] = useState('')
 
   useEffect(() => {
     void api.getEngineConfig(name).then((c) => {
       if (typeof c.domain === 'string') setDomain(c.domain)
-      if (typeof c.region === 'string') setRegion(c.region)
+      const def = REGION_DEFAULT[name] ?? ''
+      let r = typeof c.region === 'string' ? c.region : ''
+      // 防御：旧数据可能把别的引擎的 region 值带过来了
+      if (name === 'tencent' && !r.startsWith('ap-')) r = def
+      if (name === 'deepl' && !r.startsWith('api')) r = def
+      setRegion(r || def)
       setCfgLoaded(true)
     }).catch(() => setCfgLoaded(true))
   }, [name])
@@ -223,9 +235,10 @@ function EngineConfigForm({
       const payload: Parameters<typeof api.saveEngineConfig>[1] = {
         ...(appid.trim() ? { appid: appid.trim() } : {}),
         ...(appkey.trim() ? { appkey: appkey.trim() } : {}),
-        region,
       }
+      // 只为使用该字段的引擎提交，避免把 api-free 写进腾讯配置
       if (name === 'baidu') payload.domain = domain
+      if (name === 'tencent' || name === 'deepl') payload.region = region
       await api.saveEngineConfig(name, payload)
       setMsg('已保存')
       setTimeout(onSaved, 500)
@@ -289,13 +302,19 @@ function EngineConfigForm({
               <option value="ap-hongkong">港澳台地区（香港）</option>
             </select>
           </div>
-          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 8, lineHeight: 1.5 }}>
-            申请地址：
-            <a href="https://console.cloud.tencent.com/cam/capi" target="_blank"
-              rel="noreferrer" style={{ color: 'var(--accent)' }}>
-              腾讯云 API 密钥管理
-            </a>
-            <br />需同时在「机器翻译」控制台开通服务。每月 500 万字符免费（额度最大）。
+          <div style={{
+            fontSize: 11, color: 'var(--fg-muted)', marginBottom: 8, lineHeight: 1.7,
+            background: 'var(--bg-side)', padding: 8, borderRadius: 6,
+          }}>
+            <strong>申请步骤：</strong>
+            <br />1. <a href="https://console.cloud.tencent.com/cam/capi" target="_blank"
+              rel="noreferrer" style={{ color: 'var(--accent)' }}>API 密钥管理</a>获取 SecretId / SecretKey
+            <br />2. 到<a href="https://console.cloud.tencent.com/tmt" target="_blank"
+              rel="noreferrer" style={{ color: 'var(--accent)' }}>机器翻译控制台</a>开通服务
+            <br />3. <strong>使用子账号密钥时</strong>，需在 CAM 授予
+            <code style={{ fontSize: 10 }}>QcloudTMTFullAccess</code> 策略
+            （只给 ReadOnly 会报无权限）
+            <br />每月 500 万字符免费，额度在国内引擎中最大。
           </div>
         </>
       )}

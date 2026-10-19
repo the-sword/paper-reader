@@ -410,7 +410,10 @@ class DeepLEngine:
         if not key:
             raise EngineError("DeepL 未配置 API Key", retryable=False)
 
-        region = c.get("region") or "api-free"
+        region = (c.get("region") or "").strip()
+        if region not in ("api-free", "api-pro"):
+            # 常见误填：把腾讯的 ap-xxx 写进了 DeepL，按 key 后缀猜测
+            region = "api-free" if str(key).endswith(":fx") else "api-pro"
         base = c.get("endpoint") or (
             "https://api-free.deepl.com" if region == "api-free" else "https://api.deepl.com"
         )
@@ -606,6 +609,14 @@ class TencentEngine:
 
     LANGS = {"zh": "zh", "en": "en", "ja": "ja", "ko": "ko", "fr": "fr", "de": "de"}
 
+    # 机器翻译支持的地域（依据腾讯云公共参数文档）
+    VALID_REGIONS = {
+        "ap-guangzhou", "ap-beijing", "ap-shanghai", "ap-chengdu",
+        "ap-chongqing", "ap-hongkong", "ap-nanjing", "ap-singapore",
+        "ap-tokyo", "ap-seoul", "ap-bangkok", "na-ashburn",
+        "na-siliconvalley", "eu-frankfurt",
+    }
+
     def configured(self) -> bool:
         c = get_engine_config(self.name)
         return bool(c.get("appid") and c.get("appkey"))
@@ -670,7 +681,10 @@ class TencentEngine:
         if not secret_id or not secret_key:
             raise EngineError("腾讯云未配置 SecretId/SecretKey", retryable=False)
 
-        region = c.get("region") or "ap-guangzhou"
+        # 校验 region：只接受 ap- 开头的合法云地域，否则回退默认
+        region = (c.get("region") or "").strip()
+        if region not in self.VALID_REGIONS:
+            region = "ap-guangzhou"
         payload = _json.dumps({
             "SourceText": text,
             "Source": self.LANGS.get(src, src),
@@ -678,15 +692,18 @@ class TencentEngine:
             "ProjectId": 0,
         }, ensure_ascii=False)
 
-        ts = int(_time.time())
-        headers = self._sign(secret_id, secret_key, payload, ts)
-        headers["X-TC-Region"] = region
-
         t0 = _time.time()
-        try:
-            with make_client(f"https://{self.HOST}", timeout=30) as client:
-                r = client.post(f"https://{self.HOST}", headers=headers,
+
+        def _do_call(reg: str):
+            ts = int(_time.time())
+            hdrs = self._sign(secret_id, secret_key, payload, ts)
+            hdrs["X-TC-Region"] = reg
+            with make_client(f"https://{self.HOST}", timeout=30) as cli:
+                return cli.post(f"https://{self.HOST}", headers=hdrs,
                                 content=payload.encode("utf-8"))
+
+        try:
+            r = _do_call(region)
         except Exception as e:  # noqa: BLE001
             raise EngineError(f"腾讯云连接失败：{e}") from e
 
@@ -694,6 +711,16 @@ class TencentEngine:
             raise EngineError(f"腾讯云 HTTP {r.status_code}: {r.text[:200]}")
 
         body = r.json()
+
+        # 地域不支持时，自动换广州再试一次
+        err0 = (body.get("Response") or {}).get("Error") or {}
+        if err0.get("Code") == "InvalidParameterValue.InvalidRegion" and region != "ap-guangzhou":
+            try:
+                r = _do_call("ap-guangzhou")
+                body = r.json()
+                region = "ap-guangzhou"
+            except Exception:  # noqa: BLE001
+                pass
         resp = body.get("Response") or {}
         if resp.get("Error"):
             err = resp["Error"]
@@ -719,12 +746,23 @@ _TENCENT_ERRORS = {
     "AuthFailure.SignatureFailure": "签名错误：请检查 SecretId/SecretKey 是否正确",
     "AuthFailure.SecretIdNotFound": "SecretId 不存在：请到腾讯云控制台确认密钥",
     "AuthFailure.TokenFailure": "临时凭证 Token 无效",
-    "UnauthorizedOperation": "未授权：请确认已开通机器翻译服务",
-    "FailedOperation.NoFreeAmount": "免费额度已用完，请充值",
-    "FailedOperation.UserNotRegistered": "账号未开通机器翻译服务",
-    "RequestLimitExceeded": "请求频率超限，请降低调用速度",
-    "InternalError": "腾讯云内部错误，请重试",
-    "InvalidParameter": "参数错误",
+    "AuthFailure.UnauthorizedOperation":
+        "无权限调用 TextTranslate。请检查："
+        "① 是否已在「机器翻译」控制台开通服务；"
+        "② 若使用子账号/API 密钥，需在 CAM 中授予 QcloudTMTFullAccess 策略"
+        "（只给 ReadOnly 不行）",
+    "AuthFailure.CamNotAuthorized":
+        "CAM 权限不足：请为该密钥所属账号授予 QcloudTMTFullAccess 策略",
+    "UnauthorizedOperation":
+        "未授权：请确认已开通机器翻译服务，且账号具备 QcloudTMTFullAccess 权限",
+    "FailedOperation.NoFreeAmount": "免费额度已用完，请到控制台充值",
+    "FailedOperation.UserNotRegistered": "账号未开通机器翻译服务，请到控制台开通",
+    "RequestLimitExceeded": "请求频率超限（免费版 QPS 限制），请降低调用速度",
+    "InternalError": "腾讯云内部错误，请稍后重试",
+    "InvalidParameter": "参数错误：请检查源语言/目标语言是否受支持",
+    "InvalidParameterValue.InvalidRegion":
+        "地域参数无效：机器翻译不支持该地域，请在设置中选择广州/北京/上海等",
+    "UnsupportedOperation": "不支持的操作：请确认服务已开通",
 }
 
 
