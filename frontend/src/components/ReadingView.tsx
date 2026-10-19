@@ -10,32 +10,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../stores/useStore'
 import type { Segment } from '../api/client'
+import RichText, { normalizeOcrSpacing } from './RichText'
 
 type Mode = 'source' | 'bilingual' | 'zh'
 
-
-/**
- * 规范化 MinerU OCR 产生的「字母间空格」。
- *
- * MinerU 的公式识别会把字符间距当成独立字符，输出成：
- *   {L _ {c l s}}   →  应为 {L _ {cls}}
- *   \mathsf {W a r p}  →  应为 \mathsf {Warp}
- *   {D _ {m a x}}   →  应为 {D _ {max}}
- *
- * KaTeX 虽然能解析，但会按独立字符排版，间距明显异常。
- *
- * 规则：只合并「内容完全由单字母 + 空格构成」的花括号，
- * 不碰真正的单词、含符号的表达式、嵌套结构。
- */
-function normalizeOcrSpacing(latex: string): string {
-  return latex.replace(/\{([^{}]*)\}/g, (whole: string, body: string) => {
-    const t = body.trim()
-    if (/^[A-Za-z](?:\s+[A-Za-z])+$/.test(t)) {
-      return '{' + t.replace(/\s+/g, '') + '}'
-    }
-    return whole
-  })
-}
 
 export default function ReadingView() {
   const segments = useStore((s) => s.segments)
@@ -405,9 +383,9 @@ function SegmentBlock({
     <div ref={register} data-segid={seg.id} style={{ margin: '14px 0' }}>
       {mode !== 'zh' && (
         <p ref={srcRef} style={{
-          margin: 0, fontSize: 15, lineHeight: 1.75, color: 'var(--fg-strong)',
+          margin: 0, fontSize: 15, lineHeight: 1.9, color: 'var(--fg-strong)',
           textAlign: 'justify',
-        }}>{seg.source}</p>
+        }}><RichText text={seg.source} /></p>
       )}
       {mode !== 'source' && (
         <div ref={zhRef} style={{
