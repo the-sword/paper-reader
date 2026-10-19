@@ -35,37 +35,75 @@ export default function ReadingView() {
     // 标注相关
     segmentId: string
     side: 'source' | 'zh'
+    truncated?: boolean
   } | null>(null)
 
   /** 选中文字后弹出气泡 */
-  const onTextSelect = useCallback(() => {
-    const sel = window.getSelection()
-    if (!sel || sel.isCollapsed) return
-    const text = sel.toString().trim()
-    if (!text || text.length < 1) return
-    // 太长的不当划词处理
-    if (text.length > 400) return
-
-    const range = sel.getRangeAt(0)
-    const rect = range.getBoundingClientRect()
-    if (rect.width === 0 && rect.height === 0) return
-
-    // 定位选区所属段落，并判断选的是原文还是译文
-    let node: Node | null = range.commonAncestorContainer
-    if (node.nodeType === 3) node = node.parentNode
-    let segEl: HTMLElement | null = null
+  /** 向上查找最近的段落容器 */
+  const closestSeg = (n: Node | null): HTMLElement | null => {
+    let node: Node | null = n
+    if (node && node.nodeType === 3) node = node.parentNode
     while (node && node !== document.body) {
       if (node.nodeType === 1 && (node as HTMLElement).dataset.segid) {
-        segEl = node as HTMLElement
-        break
+        return node as HTMLElement
       }
       node = node.parentNode
     }
-    if (!segEl) return
+    return null
+  }
 
-    const segmentId = segEl.dataset.segid!
-    const side: 'source' | 'zh' = range.commonAncestorContainer.parentElement
-      ?.closest('.zh-block') ? 'zh' : 'source'
+  /** 向上查找译文容器（判断选的是原文还是译文） */
+  const inZh = (n: Node | null): boolean => {
+    let el: HTMLElement | null = n && n.nodeType === 1
+      ? (n as HTMLElement)
+      : n?.parentElement ?? null
+    return !!el?.closest('.zh-block')
+  }
+
+  const onTextSelect = useCallback(() => {
+    const sel = window.getSelection()
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return
+
+    const range = sel.getRangeAt(0)
+
+    // 划词翻译只处理「同一个段落内」的选区。
+    // 起止点落在不同段落时，截断到起始段落内部，避免把整篇/M 段送去翻译。
+    const startSeg = closestSeg(range.startContainer)
+    const endSeg = closestSeg(range.endContainer)
+    if (!startSeg) return
+
+    let text = sel.toString().trim()
+    let crossSeg = false
+
+    if (endSeg && endSeg !== startSeg) {
+      crossSeg = true
+      // 只保留起始段落内的部分
+      const clipped = document.createRange()
+      clipped.selectNodeContents(startSeg)
+      clipped.setStart(range.startContainer, range.startOffset)
+      text = clipped.toString().trim()
+      if (!text) return
+    }
+
+    if (text.length < 1) return
+
+    // 单段内的上限：防止整段超长导致接口慢/超限
+    if (text.length > 600) {
+      text = text.slice(0, 600)
+      crossSeg = true
+    }
+
+    // 用选区首个矩形定位气泡
+    const rects = range.getClientRects()
+    const rect = rects.length ? rects[0] : (() => {
+      const r = startSeg.getBoundingClientRect()
+      return { left: r.left, top: r.top, width: 0, height: 0 }
+    })()
+    if (rect.width === 0 && rect.height === 0 && !crossSeg) return
+
+    const segmentId = startSeg.dataset.segid!
+    const side: 'source' | 'zh' = inZh(range.startContainer) || inZh(range.endContainer)
+      ? 'zh' : 'source'
 
     // 只弹气泡，不自动翻译；由用户点「翻译」触发
     setTerm({
@@ -75,6 +113,7 @@ export default function ReadingView() {
       loading: false,
       segmentId,
       side,
+      truncated: crossSeg,
     })
   }, [])
 
@@ -341,6 +380,14 @@ export default function ReadingView() {
             <div className="term-source">
               {term.source.length > 70 ? term.source.slice(0, 70) + '…' : term.source}
             </div>
+            {term.truncated && (
+              <div style={{
+                fontSize: 10, color: '#b45309', background: '#fef3c7',
+                padding: '2px 6px', borderRadius: 4, marginTop: 4,
+              }}>
+                已截取为首段内容（划词翻译仅处理单段）
+              </div>
+            )}
 
             {/* 未翻译：显示触发按钮，不自动请求 */}
             {!term.loading && !term.text && !term.error && (
