@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../stores/useStore'
 import { api, type Segment } from '../api/client'
 import RichText, { normalizeOcrSpacing } from './RichText'
+import ReaderSettings, { DEFAULT_READER_PREFS, type ReaderPrefs } from './ReaderSettings'
 
 type Mode = 'source' | 'bilingual' | 'zh'
 
@@ -264,6 +265,9 @@ export default function ReadingView() {
   const visibleRef = useRef<Set<string>>(new Set())
   /** 可见段落变化时触发重渲染（用于按钮计数） */
   const [visibleTick, setVisibleTick] = useState(0)
+  /** 阅读主题与排版偏好 */
+  const [readerPrefs, setReaderPrefs] = useState<ReaderPrefs>(DEFAULT_READER_PREFS)
+
   /** 翻译模式：auto=滚动自动翻译（默认），manual=仅手动 */
   const [autoTranslate, setAutoTranslate] = useState(true)
   /** 偏好是否已加载（避免用默认值覆盖用户设置） */
@@ -284,6 +288,15 @@ export default function ReadingView() {
       if (typeof values.selected_engine === 'string' && values.selected_engine) {
         setSelectedEngine(values.selected_engine)
       }
+      // 阅读主题与排版
+      setReaderPrefs({
+        theme: (typeof values.reader_theme === 'string'
+          ? values.reader_theme
+          : DEFAULT_READER_PREFS.theme) as ReaderPrefs['theme'],
+        width: typeof values.reader_width === 'number' ? values.reader_width : DEFAULT_READER_PREFS.width,
+        fontSize: typeof values.reader_font_size === 'number' ? values.reader_font_size : DEFAULT_READER_PREFS.fontSize,
+        lineHeight: typeof values.reader_line_height === 'number' ? values.reader_line_height : DEFAULT_READER_PREFS.lineHeight,
+      })
       prefsLoadedRef.current = true
       // 若为自动模式，补一次首屏翻译（此时观察者已记录可见段落）
       if (values.translate_mode !== 'manual') {
@@ -499,12 +512,17 @@ export default function ReadingView() {
   }
 
   return (
-    <div style={{ display: 'flex', height: '100%', minHeight: 0 }}>
+    <div
+      className="reader-surface"
+      data-reader-theme={readerPrefs.theme === 'auto' ? undefined : readerPrefs.theme}
+      style={{ display: 'flex', height: '100%', minHeight: 0, background: 'var(--rd-bg)' }}
+    >
       {/* 大纲 */}
       {outline.length > 0 && (
         <nav style={{
-          width: 180, flexShrink: 0, borderRight: '1px solid var(--border)',
-          overflowY: 'auto', padding: '10px 6px', background: 'var(--bg-side)',
+          width: 180, flexShrink: 0, borderRight: '1px solid var(--rd-border)',
+          overflowY: 'auto', padding: '10px 6px', background: 'var(--rd-bg)',
+          color: 'var(--rd-fg-muted)',
         }}>
           <div style={{ fontSize: 11, color: 'var(--fg-muted)', padding: '0 6px 8px' }}>大纲</div>
           {outline.map((h) => (
@@ -528,7 +546,11 @@ export default function ReadingView() {
         onMouseUp={onTextSelect}
         style={{ flex: 1, minWidth: 0, overflowY: 'auto', position: 'relative' }}
       >
-        <div style={{ maxWidth: 860, margin: '0 auto', padding: '24px 32px 120px' }}>
+        <div style={{
+          maxWidth: readerPrefs.width,
+          margin: '0 auto',
+          padding: '32px 32px 120px',
+        }}>
           {segments.map((seg) => (
             <SegmentBlock
               key={seg.id}
@@ -538,6 +560,8 @@ export default function ReadingView() {
               inflight={useStore.getState().inflight.has(seg.id)}
               marks={annBySegment[seg.id] ?? []}
               onCite={onCite}
+              fontSize={readerPrefs.fontSize}
+              lineHeight={readerPrefs.lineHeight}
               register={(el) => {
                 if (el) itemRefs.current.set(seg.id, el)
                 else itemRefs.current.delete(seg.id)
@@ -674,12 +698,17 @@ export default function ReadingView() {
 
       {/* 右侧：模式与进度 */}
       <div style={{
-        width: 150, flexShrink: 0, borderLeft: '1px solid var(--border)',
-        padding: 12, background: 'var(--bg-side)', display: 'flex',
+        width: 150, flexShrink: 0, borderLeft: '1px solid var(--rd-border)',
+        padding: 12, background: 'var(--rd-bg)', display: 'flex',
         flexDirection: 'column', gap: 14, overflowY: 'auto',
       }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 11, color: 'var(--rd-fg-muted)' }}>排版</span>
+          <ReaderSettings value={readerPrefs} onChange={setReaderPrefs} />
+        </div>
+
         <div>
-          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 6 }}>翻译引擎</div>
+          <div style={{ fontSize: 11, color: 'var(--rd-fg-muted)', marginBottom: 6 }}>翻译引擎</div>
           <select
             value={selectedEngine ?? ''}
             onChange={(e) => {
@@ -838,7 +867,7 @@ function dedupeLatexTags(latex: string): string {
 }
 
 function SegmentBlock({
-  seg, mode, zh, inflight, marks, register, onCite,
+  seg, mode, zh, inflight, marks, register, onCite, fontSize, lineHeight,
 }: {
   seg: Segment
   mode: Mode
@@ -847,6 +876,8 @@ function SegmentBlock({
   marks: Mark[]
   register: (el: HTMLElement | null) => void
   onCite?: (numbers: number[], anchor: HTMLElement) => void
+  fontSize: number
+  lineHeight: number
 }) {
   const srcRef = useRef<HTMLDivElement>(null)
   const zhRef = useRef<HTMLDivElement>(null)
@@ -961,7 +992,7 @@ function SegmentBlock({
   if (seg.kind === 'heading') {
     return (
       <section ref={register} data-segid={seg.id} style={{ margin: '30px 0 12px' }}>
-        <h3 style={{ fontSize: 17, margin: 0, color: 'var(--fg-strong)', lineHeight: 1.5 }}>
+        <h3 style={{ fontSize: fontSize + 3, margin: 0, color: 'var(--rd-fg)', lineHeight: 1.45 }}>
           {mode === 'zh' && zh
             ? <RichText text={zh} />
             : <RichText text={seg.source} />}
@@ -1031,7 +1062,7 @@ function SegmentBlock({
         <p
           ref={srcRef}
           style={{
-            margin: 0, fontSize: 15, lineHeight: 1.9, color: 'var(--fg-strong)',
+            margin: 0, fontSize, lineHeight, color: 'var(--rd-fg)',
             textAlign: 'justify',
           }}
         >
@@ -1049,11 +1080,11 @@ function SegmentBlock({
           className={`zh-block${mode === 'bilingual' && zh ? ' zh-inline' : ''}`}
           style={{
             marginTop: mode === 'bilingual' && zh ? 8 : 0,
-            // 译文略小与原文形成层次，纯译文模式恢复常规字号
-            fontSize: mode === 'zh' ? 15 : 14,
-            lineHeight: 1.85,
+            // 译文比原文小 1px 形成层次；纯译文模式用同字号
+            fontSize: mode === 'zh' ? fontSize : Math.max(13, fontSize - 1),
+            lineHeight: Math.max(1.5, lineHeight - 0.1),
             textAlign: 'justify',
-            color: mode === 'zh' ? 'var(--fg-strong)' : 'var(--fg)',
+            color: mode === 'zh' ? 'var(--rd-fg)' : 'var(--rd-zh-fg)',
             minHeight: 20,
           }}
         >

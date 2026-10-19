@@ -356,36 +356,21 @@ main::-webkit-scrollbar-track { background: transparent; }
    - 圆角与内边距让整块译文"成块"，滚动时更易区分 */
 .zh-block.zh-inline {
   position: relative;
-  background: var(--zh-bg);
-  border-left: 3px solid var(--zh-border);
+  background: var(--rd-zh-bg);
+  border-left: 3px solid var(--rd-zh-border);
   border-radius: 0 6px 6px 0;
   padding: 7px 12px 7px 12px;
-  color: var(--zh-fg);
+  color: var(--rd-zh-fg);
 }
 
 /* 标题下方的译文：更轻，不抢主标题 */
 .zh-heading-zh {
   font-size: 13.5px;
   line-height: 1.6;
-  color: var(--zh-fg);
+  color: var(--rd-zh-fg);
   margin-top: 4px;
   padding-left: 10px;
-  border-left: 2px solid var(--zh-border);
-}
-
-/* 浅色模式的译文配色：淡蓝灰，与正文白底区分但不刺眼 */
-:root {
-  --zh-bg: #f2f6fb;
-  --zh-border: #9db8d8;
-  --zh-fg: #3d4a5c;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --zh-bg: #1e2530;
-    --zh-border: #3f5a7a;
-    --zh-fg: #b8c4d4;
-  }
+  border-left: 2px solid var(--rd-zh-border);
 }
 
 /* 纯译文模式下不需要色块（此时它就是正文） */
@@ -542,4 +527,134 @@ main::-webkit-scrollbar-track { background: transparent; }
   border: none;
   background: transparent;
   color: var(--fg-muted);
+}
+
+/* ============================================================
+   阅读器主题（参考 Readwise Reader / Firefox 阅读模式 / Momei）
+   ------------------------------------------------------------
+   关键设计：阅读区使用独立的配色变量（--rd-*），与侧栏的应用配色
+   （--bg / --fg）分离。这样正文与 UI 在视觉上有层次，阅读时更聚焦。
+
+   色值来源：
+     - Sepia  #f4ecd8 / #5b4636 —— Firefox 阅读模式、Readwise Sepia
+     - Night  #1a1a1b / #d7dadc —— Momei dark-night
+     - Crisp / Soft —— Readwise Crisp 与低对比柔和方案
+   对比度均满足 WCAG AA（正文 ≥ 4.5:1）
+   ============================================================ */
+
+/* 默认（auto 且系统浅色）：Crisp */
+:root {
+  --rd-bg: #ffffff;
+  --rd-fg: #1a1a1a;
+  --rd-fg-muted: #6b7280;
+  --rd-border: #e5e7eb;
+  --rd-card: #ffffff;
+  --rd-selection: rgba(79, 70, 229, 0.22);
+  /* 译文块配色 */
+  --rd-zh-bg: #f2f6fb;
+  --rd-zh-border: #9db8d8;
+  --rd-zh-fg: #3d4a5c;
+}
+
+/* 系统深色时默认切到 Night */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-reader-theme]) {
+    --rd-bg: #1a1a1b;
+    --rd-fg: #d7dadc;
+    --rd-fg-muted: #9aa0a6;
+    --rd-border: #303038;
+    --rd-card: #232326;
+    --rd-selection: rgba(129, 140, 248, 0.3);
+    --rd-zh-bg: #1e2530;
+    --rd-zh-border: #3f5a7a;
+    --rd-zh-fg: #b8c4d4;
+  }
+}
+
+/* Crisp：纯白，日间明亮环境 */
+[data-reader-theme="crisp"] {
+  --rd-bg: #ffffff;
+  --rd-fg: #1a1a1a;
+  --rd-fg-muted: #6b7280;
+  --rd-border: #e5e7eb;
+  --rd-card: #ffffff;
+  --rd-selection: rgba(79, 70, 229, 0.22);
+  --rd-zh-bg: #f2f6fb;
+  --rd-zh-border: #9db8d8;
+  --rd-zh-fg: #3d4a5c;
+}
+
+/* Sepia：羊皮纸，最护眼，长时间阅读首选 */
+[data-reader-theme="sepia"] {
+  --rd-bg: #f4ecd8;
+  --rd-fg: #5b4636;
+  --rd-fg-muted: #8a7761;
+  --rd-border: #e0d5bd;
+  --rd-card: #faf5e9;
+  --rd-selection: rgba(139, 110, 76, 0.25);
+  --rd-zh-bg: #efe4cc;
+  --rd-zh-border: #b9a480;
+  --rd-zh-fg: #6b5844;
+}
+
+/* Soft：柔和灰，低对比不刺眼 */
+[data-reader-theme="soft"] {
+  --rd-bg: #f8f9fa;
+  --rd-fg: #333333;
+  --rd-fg-muted: #7d8590;
+  --rd-border: #e3e6e9;
+  --rd-card: #ffffff;
+  --rd-selection: rgba(71, 140, 208, 0.22);
+  --rd-zh-bg: #eef3f8;
+  --rd-zh-border: #a8c0d8;
+  --rd-zh-fg: #3f4a57;
+}
+
+/* Night：深夜，暗色低刺激 */
+[data-reader-theme="night"] {
+  --rd-bg: #1a1a1b;
+  --rd-fg: #d7dadc;
+  --rd-fg-muted: #9aa0a6;
+  --rd-border: #303038;
+  --rd-card: #232326;
+  --rd-selection: rgba(129, 140, 248, 0.3);
+  --rd-zh-bg: #1e2530;
+  --rd-zh-border: #3f5a7a;
+  --rd-zh-fg: #b8c4d4;
+}
+
+/* 阅读区应用主题变量 */
+.reader-surface {
+  background: var(--rd-bg);
+  color: var(--rd-fg);
+}
+.reader-surface ::selection {
+  background: var(--rd-selection);
+}
+
+/* 主题下引用标与标注色条的可读性 */
+.reader-surface .cite-ref {
+  color: #478cd0;
+  background: rgba(71, 140, 208, 0.12);
+  border-bottom: 1.5px solid #478cd0;
+}
+.reader-surface .cite-ref:hover {
+  background: #478cd0;
+  color: #fff;
+}
+
+[data-reader-theme="sepia"] .cite-ref {
+  color: #8a5a2b;
+  background: rgba(138, 90, 43, 0.14);
+  border-bottom-color: #8a5a2b;
+}
+[data-reader-theme="sepia"] .cite-ref:hover {
+  background: #8a5a2b;
+  color: #f4ecd8;
+}
+
+[data-reader-theme="night"] .cite-ref {
+  color: #8ab4e8;
+  background: rgba(138, 180, 232, 0.16);
+  border-bottom-color: #8ab4e8;
 }

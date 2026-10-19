@@ -20,6 +20,10 @@ DEFAULTS: dict[str, Any] = {
     "reading_mode": "bilingual",  # source | bilingual | zh
     "selected_engine": "",        # 空表示自动
     "view_mode": "pdf",           # pdf | reading —— 上次使用的视图
+    "reader_theme": "auto",       # auto | crisp | sepia | soft | night
+    "reader_width": 720,          # 正文最大宽度 px（640-900）
+    "reader_font_size": 16,       # 正文字号 px（14-20）
+    "reader_line_height": 1.9,    # 行高倍数（1.6-2.2）
 }
 
 
