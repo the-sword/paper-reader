@@ -400,11 +400,28 @@ class BingEngine:
         now = time.time()
         if self._token and now - self._token_at < self._TTL:
             return self._token
+
+        # 手动配置的 token 优先（用于端点变更时应急）
+        cfg = get_engine_config(self.name)
+        manual = (cfg.get("appkey") or "").strip()
+        if manual:
+            BingEngine._token = manual
+            BingEngine._token_at = now
+            return manual
+
         try:
             with make_client(self.AUTH_URL, timeout=20) as client:
                 r = client.get(self.AUTH_URL)
         except Exception as e:  # noqa: BLE001
             raise EngineError(f"Bing token 获取失败：{e}") from e
+
+        if r.status_code == 404:
+            raise EngineError(
+                "Bing 免 token 端点已废弃（edge.microsoft.com/translate/auth 返回 404）。"
+                "原因：微软下线了该接口。如需使用 Bing，请改用 Azure 官方翻译 API，"
+                "或在设置中手动填入 edge token。建议优先使用腾讯云/火山等正式 API",
+                retryable=False,
+            )
         if r.status_code != 200 or not r.text.strip():
             raise EngineError(f"Bing token 获取失败 HTTP {r.status_code}")
         BingEngine._token = r.text.strip()
@@ -550,7 +567,8 @@ _ENGINE_HINTS = {
     "volcano": "火山引擎控制台开通机器翻译，获取 AK/SK，每月 200 万字符免费",
     "google": "无需配置。非官方端点：主端点常被限流，会自动切到备用端点。"
               "备用端点对短标题易误译，建议仅用于正文，重要内容交给 AI 或国内引擎",
-    "bing": "无需配置。非官方端点，token 可能失效，仅作备用",
+    "bing": "⚠️ 免 token 端点已被微软废弃（返回 404），当前不可用。"
+            "如需 Bing，请在下方填入手动获取的 token，或改用 Azure 官方 API",
     "deepl": "DeepL 官网申请 API Key，免费版每月 50 万字符，服务器在境外",
     "ai": "质量最好但较慢（单段约 5-10 秒）。适合全文精翻，不适合划词",
 }
