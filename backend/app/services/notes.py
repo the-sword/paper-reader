@@ -26,21 +26,51 @@ def _validate_rects(rects: list[list[float]]) -> None:
 
 def create_annotation(doc_id: str, page: int, kind: str, rects: list[list[float]],
                       color: str = "#ffd400", quote: str = "",
-                      comment: str = "") -> dict[str, Any]:
+                      comment: str = "", segment_id: str | None = None,
+                      side: str = "source") -> dict[str, Any]:
+    """新建标注。
+
+    两种锚定方式：
+      - PDF 坐标：传 page + rects（矩形范围）
+      - 段落流：传 segment_id（rects 可为空），用于双语阅读视图
+
+    side 区分标注的是原文还是译文，便于在侧栏分组显示。
+    """
     if kind not in VALID_KINDS:
         raise ValueError(f"invalid kind: {kind}")
-    if page < 1:
-        raise ValueError("page must be >= 1")
-    _validate_rects(rects)
+    if side not in ("source", "zh"):
+        raise ValueError("side must be 'source' or 'zh'")
+
+    is_segment = bool(segment_id)
+    if not is_segment:
+        if page < 1:
+            raise ValueError("page must be >= 1")
+        _validate_rects(rects)
+    else:
+        # 段落标注：校验段落归属，避免跨文献引用
+        with db() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM segments WHERE id=? AND document_id=?",
+                (segment_id, doc_id),
+            ).fetchone()
+        if not row:
+            raise ValueError("段落不存在")
+        with db() as conn:
+            seg = conn.execute(
+                "SELECT page FROM segments WHERE id=?", (segment_id,)
+            ).fetchone()
+            page = (seg["page"] if seg else 1) or 1
 
     ann_id = str(uuid.uuid4())
     now = _now()
     with db() as conn:
         conn.execute(
             """INSERT INTO annotations
-               (id, document_id, page, kind, color, rects, quote, comment, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (ann_id, doc_id, page, kind, color, json.dumps(rects), quote, comment, now, now),
+               (id, document_id, page, kind, color, rects, quote, comment,
+                segment_id, side, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (ann_id, doc_id, page, kind, color, json.dumps(rects), quote, comment,
+             segment_id, side, now, now),
         )
         return dict(conn.execute("SELECT * FROM annotations WHERE id=?", (ann_id,)).fetchone())
 
@@ -54,6 +84,13 @@ def list_annotations(doc_id: str, page: int | None = None) -> list[dict[str, Any
     sql += " ORDER BY page, created_at"
     with db() as conn:
         rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+        # 补充段落序号，供侧栏展示「第 N 段」
+        for r in rows:
+            if r.get("segment_id"):
+                seg = conn.execute(
+                    "SELECT idx FROM segments WHERE id=?", (r["segment_id"],)
+                ).fetchone()
+                r["segment_idx"] = seg["idx"] if seg else None
     for r in rows:
         r["rects"] = json.loads(r["rects"])
     return rows

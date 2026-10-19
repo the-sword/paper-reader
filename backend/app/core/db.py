@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS annotations (
   rects       TEXT NOT NULL,
   quote       TEXT,
   comment     TEXT,
+  -- 阅读视图（段落流）的标注：指向具体段落，rects 为空
+  segment_id  TEXT,
+  -- 译文标注时记录其归属，'source' / 'zh'
+  side        TEXT DEFAULT 'source',
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 );
@@ -131,6 +135,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     if "page" not in cols("segments"):
         conn.execute("ALTER TABLE segments ADD COLUMN page INTEGER NOT NULL DEFAULT 1")
+
+    # 阅读视图标注：段落锚点
+    ann_cols = cols("annotations")
+    if "segment_id" not in ann_cols:
+        conn.execute("ALTER TABLE annotations ADD COLUMN segment_id TEXT")
+    if "side" not in ann_cols:
+        conn.execute("ALTER TABLE annotations ADD COLUMN side TEXT DEFAULT 'source'")
 
 
 def init_db() -> None:

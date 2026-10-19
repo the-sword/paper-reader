@@ -36,7 +36,8 @@ interface State {
   setTag: (id: string | null) => void
   setSearch: (q: string) => void
   refreshAnnotations: (docId: string) => Promise<void>
-  addAnnotation: (docId: string, page: number, rects: number[][], quote: string, color: string) => Promise<void>
+  addAnnotation: (docId: string, page: number, rects: number[][], quote: string, color: string,
+                  opts?: { segmentId?: string; side?: string; kind?: string }) => Promise<void>
   removeAnnotation: (id: string) => Promise<void>
   clearError: () => void
   moveDocumentToFolder: (docId: string, folderId: string | null, additive?: boolean) => Promise<void>
@@ -130,11 +131,13 @@ export const useStore = create<State>((set, get) => ({
     set({ annotations })
   },
 
-  addAnnotation: async (docId, page, rects, quote, color) => {
+  addAnnotation: async (docId, page, rects, quote, color, opts) => {
     try {
       await api.createAnnotation({
-        document_id: docId, page, kind: 'highlight',
+        document_id: docId, page, kind: opts?.kind ?? 'highlight',
         rects, color, quote, comment: '',
+        segment_id: opts?.segmentId ?? null,
+        side: opts?.side ?? 'source',
       })
       await get().refreshAnnotations(docId)
     } catch (e) {

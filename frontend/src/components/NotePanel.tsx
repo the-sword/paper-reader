@@ -30,10 +30,40 @@ export default function NotePanel({ width = 300, embedded = false }: { width?: n
     )
   }
 
-  const byPage = annotations.reduce<Record<number, typeof annotations>>((acc, a) => {
-    ;(acc[a.page] ||= []).push(a)
-    return acc
-  }, {})
+  // 段落流标注按段落序号分组，PDF 坐标标注按页码分组
+  type Group = { key: string; label: string; order: number; items: typeof annotations }
+  const groups: Group[] = []
+  const segGroups = new Map<string, Group>()
+  const pageGroups = new Map<number, Group>()
+
+  for (const a of annotations) {
+    if (a.segment_id) {
+      const k = a.segment_id
+      let g = segGroups.get(k)
+      if (!g) {
+        g = {
+          key: k,
+          label: a.segment_idx !== null && a.segment_idx !== undefined
+            ? `第 ${a.segment_idx + 1} 段`
+            : '段落',
+          order: a.segment_idx ?? 9999,
+          items: [],
+        }
+        segGroups.set(k, g)
+        groups.push(g)
+      }
+      g.items.push(a)
+    } else {
+      let g = pageGroups.get(a.page)
+      if (!g) {
+        g = { key: `p${a.page}`, label: `第 ${a.page} 页`, order: 100000 + a.page, items: [] }
+        pageGroups.set(a.page, g)
+        groups.push(g)
+      }
+      g.items.push(a)
+    }
+  }
+  groups.sort((x, y) => x.order - y.order)
 
   const saveComment = async (id: string) => {
     await api.updateAnnotation(id, { comment: draft })
@@ -88,21 +118,28 @@ export default function NotePanel({ width = 300, embedded = false }: { width?: n
       <div style={{ flex: 1, overflowY: 'auto', padding: 10 }}>
         {!annotations.length && (
           <div className="hint" style={{ padding: 12 }}>
-            选中 PDF 中的文字，在气泡里点「高亮」即可创建标注。
+            在「双语阅读」里选中文字，气泡中点色块高亮、或点「笔记」。
+            <br />PDF 视图里选中文字也能高亮。
           </div>
         )}
-        {Object.entries(byPage)
-          .sort(([a], [b]) => Number(a) - Number(b))
-          .map(([page, anns]) => (
-            <div key={page} style={{ marginBottom: 14 }}>
+        {groups.map((g) => (
+            <div key={g.key} style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 5 }}>
-                第 {page} 页
+                {g.label}
               </div>
-              {anns.map((a) => (
+              {g.items.map((a) => (
                 <div key={a.id} style={{
                   padding: '6px 8px', marginBottom: 6, borderRadius: 6,
                   borderLeft: `3px solid ${a.color}`, background: 'var(--bg-card)',
                 }}>
+                  {a.segment_id && (
+                    <span style={{
+                      fontSize: 9, padding: '0 4px', borderRadius: 3, marginBottom: 3,
+                      display: 'inline-block',
+                      background: a.side === 'zh' ? 'var(--zh-bg)' : 'var(--bg-active)',
+                      color: a.side === 'zh' ? 'var(--zh-fg)' : 'var(--fg-muted)',
+                    }}>{a.side === 'zh' ? '译文' : '原文'}</span>
+                  )}
                   {a.quote && (
                     <div style={{ fontSize: 12, marginBottom: 4, lineHeight: 1.5, color: 'var(--fg-strong)' }}>
                       {a.quote}

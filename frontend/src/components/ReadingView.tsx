@@ -16,19 +16,25 @@ type Mode = 'source' | 'bilingual' | 'zh'
 
 
 export default function ReadingView() {
+  const currentDoc = useStore((s) => s.currentDoc)
   const segments = useStore((s) => s.segments)
   const translations = useStore((s) => s.translations)
   const engines = useStore((s) => s.engines)
   const selectedEngine = useStore((s) => s.selectedEngine)
   const setSelectedEngine = useStore((s) => s.setSelectedEngine)
   const aiReady = useStore((s) => s.aiReady)
+  const annotations = useStore((s) => s.annotations)
+  const addAnnotation = useStore((s) => s.addAnnotation)
   const [mode, setMode] = useState<Mode>('bilingual')
 
-  // 划词翻译气泡
+  // 选区气泡：翻译 + 标注
   const [term, setTerm] = useState<{
     x: number; y: number; source: string
     text?: string; engine?: string; latency?: number; cached?: boolean
     loading: boolean; error?: string
+    // 标注相关
+    segmentId: string
+    side: 'source' | 'zh'
   } | null>(null)
 
   /** 选中文字后弹出气泡 */
@@ -44,11 +50,30 @@ export default function ReadingView() {
     const rect = range.getBoundingClientRect()
     if (rect.width === 0 && rect.height === 0) return
 
+    // 定位选区所属段落，并判断选的是原文还是译文
+    let node: Node | null = range.commonAncestorContainer
+    if (node.nodeType === 3) node = node.parentNode
+    let segEl: HTMLElement | null = null
+    while (node && node !== document.body) {
+      if (node.nodeType === 1 && (node as HTMLElement).dataset.segid) {
+        segEl = node as HTMLElement
+        break
+      }
+      node = node.parentNode
+    }
+    if (!segEl) return
+
+    const segmentId = segEl.dataset.segid!
+    const side: 'source' | 'zh' = range.commonAncestorContainer.parentElement
+      ?.closest('.zh-block') ? 'zh' : 'source'
+
     setTerm({
       x: rect.left + rect.width / 2,
       y: rect.top - 10,
       source: text,
       loading: true,
+      segmentId,
+      side,
     })
 
     void (async () => {
@@ -69,6 +94,32 @@ export default function ReadingView() {
       }
     })()
   }, [selectedEngine])
+
+  /** 高亮当前选区 */
+  const doHighlight = async (color: string) => {
+    const t = term
+    if (!t || !currentDoc) return
+    await addAnnotation(currentDoc.id, 1, [], t.source, color, {
+      segmentId: t.segmentId,
+      side: t.side,
+      kind: 'highlight',
+    })
+    setTerm(null)
+    window.getSelection()?.removeAllRanges()
+  }
+
+  /** 高亮并立即写笔记（侧栏可编辑） */
+  const doNote = async () => {
+    const t = term
+    if (!t || !currentDoc) return
+    await addAnnotation(currentDoc.id, 1, [], t.source, '#ffd400', {
+      segmentId: t.segmentId,
+      side: t.side,
+      kind: 'note',
+    })
+    setTerm(null)
+    window.getSelection()?.removeAllRanges()
+  }
 
   /** 点击空白处关闭气泡 */
   useEffect(() => {
@@ -157,6 +208,18 @@ export default function ReadingView() {
     scheduleFlush()
   }, [segments, mode, scheduleFlush])
 
+  // 按段落聚合标注，传给段落渲染
+  const annBySegment = useMemo(() => {
+    const m: Record<string, Array<{ id: string; color: string; side: string; comment: string | null }>> = {}
+    for (const a of annotations) {
+      if (!a.segment_id) continue
+      ;(m[a.segment_id] ||= []).push({
+        id: a.id, color: a.color, side: a.side, comment: a.comment,
+      })
+    }
+    return m
+  }, [annotations])
+
   // ---- 大纲 ----
   const outline = useMemo(
     () => segments.filter((s) => s.kind === 'heading'),
@@ -219,6 +282,7 @@ export default function ReadingView() {
               mode={mode}
               zh={translations[seg.id]?.text}
               inflight={useStore.getState().inflight.has(seg.id)}
+              marks={annBySegment[seg.id] ?? []}
               register={(el) => {
                 if (el) itemRefs.current.set(seg.id, el)
                 else itemRefs.current.delete(seg.id)
@@ -253,6 +317,28 @@ export default function ReadingView() {
             {!term.loading && term.error && (
               <div className="term-result error">{term.error}</div>
             )}
+            <div className="term-actions">
+              {[
+                ['#ffd400', '黄'],
+                ['#22c55e', '绿'],
+                ['#3b82f6', '蓝'],
+                ['#ef4444', '红'],
+              ].map(([c, label]) => (
+                <button
+                  key={c}
+                  className="hl-dot"
+                  style={{ background: c }}
+                  title={`高亮（${term.side === 'zh' ? '译文' : '原文'}）`}
+                  onClick={() => void doHighlight(c)}
+                >{label}</button>
+              ))}
+              <button
+                className="btn-ghost"
+                style={{ fontSize: 11, padding: '1px 7px' }}
+                onClick={() => void doNote()}
+                title="高亮并写笔记"
+              >笔记</button>
+            </div>
             <button
               className="btn-ghost term-close"
               onClick={() => setTerm(null)}
@@ -331,13 +417,16 @@ export default function ReadingView() {
 
 // ---------------------------------------------------------------------------
 
+interface Mark { id: string; color: string; side: string; comment: string | null }
+
 function SegmentBlock({
-  seg, mode, zh, inflight, register,
+  seg, mode, zh, inflight, marks, register,
 }: {
   seg: Segment
   mode: Mode
   zh?: string
   inflight: boolean
+  marks: Mark[]
   register: (el: HTMLElement | null) => void
 }) {
   const srcRef = useRef<HTMLDivElement>(null)
@@ -455,7 +544,7 @@ function SegmentBlock({
             : <RichText text={seg.source} />}
         </h3>
         {mode === 'bilingual' && zh && (
-          <div style={{ fontSize: 14, color: 'var(--fg-muted)', marginTop: 3 }}>
+          <div className="zh-heading-zh">
             <RichText text={zh} />
           </div>
         )}
@@ -488,28 +577,60 @@ function SegmentBlock({
   }
 
   // 普通正文
+  const srcMarks = marks.filter((m) => m.side === 'source')
+  const zhMarks = marks.filter((m) => m.side === 'zh')
+
   return (
-    <div ref={register} data-segid={seg.id} style={{ margin: '14px 0' }}>
+    <div
+      ref={register}
+      data-segid={seg.id}
+      className={`seg-block${marks.length ? ' has-mark' : ''}`}
+      style={{ margin: '14px 0' }}
+    >
       {mode !== 'zh' && (
-        <p ref={srcRef} style={{
-          margin: 0, fontSize: 15, lineHeight: 1.9, color: 'var(--fg-strong)',
-          textAlign: 'justify',
-        }}><RichText text={seg.source} /></p>
+        <p
+          ref={srcRef}
+          className={srcMarks.length ? 'marked-text' : undefined}
+          style={{
+            margin: 0, fontSize: 15, lineHeight: 1.9, color: 'var(--fg-strong)',
+            textAlign: 'justify',
+            ['--mark-color' as string]: srcMarks[0]?.color ?? 'transparent',
+          }}
+        >
+          <RichText text={seg.source} />
+          {srcMarks.length > 0 && (
+            <span className="seg-mark-count" title={`原文有 ${srcMarks.length} 条标注`}>
+              {srcMarks.length}
+            </span>
+          )}
+        </p>
       )}
       {mode !== 'source' && (
-        <div ref={zhRef} style={{
-          marginTop: mode === 'bilingual' && zh ? 6 : 0,
-          fontSize: 15, lineHeight: 1.8, textAlign: 'justify',
-          color: mode === 'zh' ? 'var(--fg-strong)' : 'var(--fg)',
-          borderLeft: mode === 'bilingual' ? '2px solid var(--border)' : 'none',
-          paddingLeft: mode === 'bilingual' ? 10 : 0,
-          minHeight: 20,
-        }}>
+        <div
+          ref={zhRef}
+          className={`zh-block${mode === 'bilingual' && zh ? ' zh-inline' : ''}`}
+          style={{
+            marginTop: mode === 'bilingual' && zh ? 8 : 0,
+            // 译文略小与原文形成层次，纯译文模式恢复常规字号
+            fontSize: mode === 'zh' ? 15 : 14,
+            lineHeight: 1.85,
+            textAlign: 'justify',
+            color: mode === 'zh' ? 'var(--fg-strong)' : 'var(--fg)',
+            minHeight: 20,
+            ['--mark-color' as string]: zhMarks[0]?.color ?? 'transparent',
+          }}
+        >
           {zh
-            ? <RichText text={zh} />
-            : (inflight
-              ? <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>翻译中…</span>
-              : <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>—</span>)}
+            ? <><RichText text={zh} />
+                {zhMarks.length > 0 && (
+                  <span className="seg-mark-count" title={`译文有 ${zhMarks.length} 条标注`}>
+                    {zhMarks.length}
+                  </span>
+                )}</>
+            : null}
+          {!zh && (inflight
+            ? <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>翻译中…</span>
+            : <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>—</span>)}
         </div>
       )}
     </div>

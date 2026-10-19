@@ -12,12 +12,14 @@ router = APIRouter()
 
 class AnnotationIn(BaseModel):
     document_id: str
-    page: int
+    page: int = 1
     kind: str = "highlight"
-    rects: list[list[float]]
+    rects: list[list[float]] = []
     color: str = "#ffd400"
     quote: str = ""
     comment: str = ""
+    segment_id: str | None = None   # 段落流标注时为段落 id
+    side: str = "source"            # source | zh
 
 
 class AnnotationPatch(BaseModel):
@@ -36,6 +38,7 @@ def create_annotation(body: AnnotationIn) -> dict:
         return notes.create_annotation(
             body.document_id, body.page, body.kind, body.rects,
             body.color, body.quote, body.comment,
+            segment_id=body.segment_id, side=body.side,
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e

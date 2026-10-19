@@ -41,6 +41,9 @@ export interface Annotation {
   rects: number[][]
   quote: string | null
   comment: string | null
+  segment_id: string | null
+  side: string
+  segment_idx: number | null
   created_at: string
   updated_at: string
 }
@@ -176,8 +179,9 @@ export const api = {
     return req<Annotation[]>(`/annotations?${qs}`)
   },
   createAnnotation: (a: {
-    document_id: string; page: number; kind: string
-    rects: number[][]; color: string; quote: string; comment: string
+    document_id: string; page?: number; kind: string
+    rects?: number[][]; color: string; quote: string; comment: string
+    segment_id?: string | null; side?: string
   }) => req<Annotation>('/annotations', { method: 'POST', body: JSON.stringify(a) }),
   updateAnnotation: (id: string, p: { color?: string; comment?: string }) =>
     req<Annotation>(`/annotations/${id}`, { method: 'PATCH', body: JSON.stringify(p) }),
