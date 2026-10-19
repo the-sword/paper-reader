@@ -24,6 +24,11 @@ DEFAULTS: dict[str, Any] = {
     "reader_width": 720,          # 正文最大宽度 px（640-900）
     "reader_font_size": 16,       # 正文字号 px（14-20）
     "reader_line_height": 1.9,    # 行高倍数（1.6-2.2）
+    "panel_sidebar": 250,         # 左侧栏宽度
+    "panel_list": 340,            # 文档列表宽度
+    "panel_notes": 300,           # 右侧栏宽度
+    "panel_sidebar_visible": True,  # 左侧栏是否展开
+    "panel_notes_visible": True,    # 右侧栏是否展开
 }
 
 

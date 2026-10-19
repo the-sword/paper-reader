@@ -39,6 +39,7 @@ export default function App() {
 
   const [scale, setScale] = useState(1.0)
   const [wSidebar, setWSidebar] = useState(W_SIDEBAR)
+  const [panelPrefsLoaded, setPanelPrefsLoaded] = useState(false)
   const [wList, setWList] = useState(W_LIST)
   const [wNotes, setWNotes] = useState(W_NOTES)
   const [showSidebar, setShowSidebar] = useState(true)
@@ -83,6 +84,13 @@ export default function App() {
       if (values.view_mode === 'reading' || values.view_mode === 'pdf') {
         setView(values.view_mode)
       }
+      // 面板尺寸与显隐
+      if (typeof values.panel_sidebar === 'number') setWSidebar(values.panel_sidebar)
+      if (typeof values.panel_list === 'number') setWList(values.panel_list)
+      if (typeof values.panel_notes === 'number') setWNotes(values.panel_notes)
+      if (typeof values.panel_sidebar_visible === 'boolean') setShowSidebar(values.panel_sidebar_visible)
+      if (typeof values.panel_notes_visible === 'boolean') setShowNotes(values.panel_notes_visible)
+      setPanelPrefsLoaded(true)
       setViewPrefLoaded(true)
     }).catch(() => setViewPrefLoaded(true))
   }, [])
@@ -103,6 +111,24 @@ export default function App() {
     }
   }, [view, viewPrefLoaded, currentDoc, segments.length, parseState])
 
+  /** 面板布局保存的防抖 timer */
+  const panelSaveTimer = useRef<number | null>(null)
+
+  /** 保存面板布局到偏好（防抖，避免拖动时频繁请求） */
+  const savePanelPrefs = (patch: { sidebar?: number; list?: number; notes?: number; showSidebar?: boolean; showNotes?: boolean }) => {
+    if (!panelPrefsLoaded) return
+    if (panelSaveTimer.current !== null) window.clearTimeout(panelSaveTimer.current)
+    panelSaveTimer.current = window.setTimeout(() => {
+      panelSaveTimer.current = null
+      void api.savePrefs({
+        ...(patch.sidebar !== undefined ? { panel_sidebar: patch.sidebar } : {}),
+        ...(patch.list !== undefined ? { panel_list: patch.list } : {}),
+        ...(patch.notes !== undefined ? { panel_notes: patch.notes } : {}),
+        ...(patch.showSidebar !== undefined ? { panel_sidebar_visible: patch.showSidebar } : {}),
+        ...(patch.showNotes !== undefined ? { panel_notes_visible: patch.showNotes } : {}),
+      }).catch(() => {})
+    }, 400)
+  }
   /** 切换视图并记住选择 */
   const switchView = (v: ViewMode) => {
     setView(v)
@@ -159,7 +185,7 @@ export default function App() {
         <button
           className="btn-ghost" style={{ padding: '4px 8px' }}
           title={showSidebar ? '收起侧栏' : '展开侧栏'}
-          onClick={() => setShowSidebar((v) => !v)}
+          onClick={() => setShowSidebar((v) => { savePanelPrefs({ showSidebar: !v }); return !v })}
         >☰</button>
         <strong style={{ fontSize: 14, whiteSpace: 'nowrap' }}>Paper Reader</strong>
 
@@ -220,7 +246,7 @@ export default function App() {
           <button
             className="btn-ghost" style={{ padding: '4px 8px' }}
             title={showNotes ? '收起笔记' : '展开笔记'}
-            onClick={() => setShowNotes((v) => !v)}
+            onClick={() => setShowNotes((v) => { savePanelPrefs({ showNotes: !v }); return !v })}
           >📝</button>
         </div>
       </header>
@@ -230,12 +256,12 @@ export default function App() {
         {showSidebar && (
           <>
             <Sidebar width={wSidebar} />
-            <Resizer side="left" min={180} max={420} onResize={setWSidebar} />
+            <Resizer side="left" min={180} max={420} onResize={(w) => { setWSidebar(w); savePanelPrefs({ sidebar: w }) }} />
           </>
         )}
 
         <DocumentList width={wList} />
-        <Resizer side="left" min={240} max={520} onResize={setWList} />
+        <Resizer side="left" min={240} max={520} onResize={(w) => { setWList(w); savePanelPrefs({ list: w }) }} />
 
         <main
           ref={mainRef}
@@ -258,7 +284,7 @@ export default function App() {
 
         {showNotes && (
           <>
-            <Resizer side="right" min={240} max={520} onResize={setWNotes} />
+            <Resizer side="right" min={240} max={520} onResize={(w) => { setWNotes(w); savePanelPrefs({ notes: w }) }} />
             <RightPanel width={wNotes} />
           </>
         )}
