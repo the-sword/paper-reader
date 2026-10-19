@@ -818,6 +818,25 @@ interface Mark {
   end_offset: number | null
 }
 
+/**
+ * 去掉重复的 \tag。
+ *
+ * MinerU 解析时偶尔会把公式编号拼两次，形如
+ *   \tag {10}\tag{10}
+ * KaTeX 遇到多个 \tag 会抛 "Multiple \tag" 并整条公式渲染失败。
+ * 这里只保留最后一个编号。
+ */
+function dedupeLatexTags(latex: string): string {
+  const tags = [...latex.matchAll(/\\tag\s*\{([^{}]*)\}/g)]
+  if (tags.length <= 1) return latex
+  const keep = tags[tags.length - 1][1]
+  let first = true
+  return latex.replace(/\\tag\s*\{[^{}]*\}/g, () => {
+    if (first) { first = false; return `\\tag{${keep}}` }
+    return ''
+  })
+}
+
 function SegmentBlock({
   seg, mode, zh, inflight, marks, register, onCite,
 }: {
@@ -854,6 +873,10 @@ function SegmentBlock({
       // KaTeX 能解析但渲染间距异常，这里把纯字母序列里的空格去掉。
       // 只处理 \mathrm/\mathsf/\mathit/\text 内部，避免误伤真正的空格语义。
       latex = normalizeOcrSpacing(latex)
+
+      // MinerU 偶尔把公式编号拼两次（\tag{10}\tag{10}），
+      // KaTeX 会抛 "Multiple \tag" 导致整条公式渲染失败，这里去重。
+      latex = dedupeLatexTags(latex)
 
       if (!latex) {
         el.textContent = seg.source
