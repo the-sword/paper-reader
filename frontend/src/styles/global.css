@@ -262,3 +262,27 @@ main::-webkit-scrollbar-track { background: transparent; }
 
 /* KaTeX 公式颜色跟随主题 */
 .katex { color: var(--fg-strong); }
+
+/* ---------- MinerU 表格 ---------- */
+.md-table table {
+  border-collapse: collapse;
+  font-size: 12px;
+  min-width: 100%;
+  white-space: nowrap;
+}
+.md-table th,
+.md-table td {
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+  text-align: center;
+  vertical-align: middle;
+}
+.md-table thead th,
+.md-table tr:first-child td {
+  background: var(--bg-side);
+  font-weight: 600;
+  color: var(--fg-strong);
+}
+.md-table tr:hover td {
+  background: var(--bg-active);
+}

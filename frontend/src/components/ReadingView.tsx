@@ -351,11 +351,15 @@ function SegmentBlock({
   if (seg.kind === 'heading') {
     return (
       <section ref={register} data-segid={seg.id} style={{ margin: '30px 0 12px' }}>
-        <h3 style={{ fontSize: 17, margin: 0, color: 'var(--fg-strong)', lineHeight: 1.4 }}>
-          {mode === 'zh' && zh ? zh : seg.source}
+        <h3 style={{ fontSize: 17, margin: 0, color: 'var(--fg-strong)', lineHeight: 1.5 }}>
+          {mode === 'zh' && zh
+            ? <RichText text={zh} />
+            : <RichText text={seg.source} />}
         </h3>
         {mode === 'bilingual' && zh && (
-          <div style={{ fontSize: 14, color: 'var(--fg-muted)', marginTop: 3 }}>{zh}</div>
+          <div style={{ fontSize: 14, color: 'var(--fg-muted)', marginTop: 3 }}>
+            <RichText text={zh} />
+          </div>
         )}
       </section>
     )
@@ -371,10 +375,17 @@ function SegmentBlock({
 
   if (seg.kind === 'table') {
     return (
-      <div ref={register} data-segid={seg.id} style={{
-        margin: '16px 0', padding: 12, border: '1px solid var(--border)',
-        borderRadius: 8, fontSize: 12, overflowX: 'auto',
-      }} dangerouslySetInnerHTML={{ __html: seg.source }} />
+      <div
+        ref={register}
+        data-segid={seg.id}
+        className="md-table"
+        style={{
+          margin: '18px 0', overflowX: 'auto',
+          border: '1px solid var(--border)', borderRadius: 8, padding: 4,
+          background: 'var(--bg-card)',
+        }}
+        dangerouslySetInnerHTML={{ __html: seg.source }}
+      />
     )
   }
 
@@ -396,9 +407,11 @@ function SegmentBlock({
           paddingLeft: mode === 'bilingual' ? 10 : 0,
           minHeight: 20,
         }}>
-          {zh ?? (inflight
-            ? <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>翻译中…</span>
-            : <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>—</span>)}
+          {zh
+            ? <RichText text={zh} />
+            : (inflight
+              ? <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>翻译中…</span>
+              : <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>—</span>)}
         </div>
       )}
     </div>
