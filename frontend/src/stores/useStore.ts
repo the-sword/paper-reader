@@ -52,6 +52,7 @@ interface State {
   loadEngines: () => Promise<void>
   setSelectedEngine: (name: string | null) => void
   resetTranslations: () => void
+  refreshCurrentDocMeta: () => Promise<void>
 }
 
 /** 同时在飞的翻译请求上限（中转站常有 rpm 限流，默认保守取 2） */
@@ -249,6 +250,19 @@ export const useStore = create<State>((set, get) => ({
 
   /** 清空前端已加载的译文（用于重翻） */
   resetTranslations: () => set({ translations: {}, inflight: new Set<string>() }),
+
+  /**
+   * 只刷新当前文档的元数据（标签、文件夹等），不重载段落与译文。
+   * 用于打标签这类操作，避免整页重建导致输入中断。
+   */
+  refreshCurrentDocMeta: async () => {
+    const doc = get().currentDoc
+    if (!doc) return
+    try {
+      const fresh = await api.getDocument(doc.id)
+      set({ currentDoc: fresh })
+    } catch { /* 忽略 */ }
+  },
 
   startParse: async (engine = 'auto') => {
     const doc = get().currentDoc

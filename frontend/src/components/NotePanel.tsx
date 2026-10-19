@@ -2,6 +2,25 @@ import { useState } from 'react'
 import { useStore } from '../stores/useStore'
 import { api } from '../api/client'
 
+/**
+ * 包裹容器。
+ *
+ * 必须是普通函数而非组件：若在组件内部定义 `const Shell = ...`，
+ * 每次渲染都会产生新的组件类型，React 会卸载重建子树，
+ * 导致输入框每输一个字符就失焦。
+ */
+function shellWrap(
+  children: React.ReactNode, embedded: boolean, width: number,
+): React.ReactElement {
+  return embedded ? (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      {children}
+    </div>
+  ) : (
+    <aside style={{ ...panelStyle, width }}>{children}</aside>
+  )
+}
+
 export default function NotePanel({ width = 300, embedded = false }: { width?: number; embedded?: boolean }) {
   const currentDoc = useStore((s) => s.currentDoc)
   const annotations = useStore((s) => s.annotations)
@@ -13,20 +32,12 @@ export default function NotePanel({ width = 300, embedded = false }: { width?: n
   const [tagInput, setTagInput] = useState('')
 
   /** 根据 embedded 决定外层容器 */
-  const Shell = ({ children }: { children: React.ReactNode }) =>
-    embedded ? (
-      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-        {children}
-      </div>
-    ) : (
-      <aside style={{ ...panelStyle, width }}>{children}</aside>
-    )
-
   if (!currentDoc) {
     return (
-      <Shell>
-        <div className="hint" style={{ padding: 16 }}>选择一篇文献开始阅读</div>
-      </Shell>
+      shellWrap(
+        <div className="hint" style={{ padding: 16 }}>选择一篇文献开始阅读</div>,
+        embedded, width,
+      )
     )
   }
 
@@ -78,11 +89,12 @@ export default function NotePanel({ width = 300, embedded = false }: { width?: n
     await api.tagDocument(currentDoc.id, tag.id)
     setTagInput('')
     await refreshSidebar()
-    await useStore.getState().openDocument(currentDoc.id)
+    // 只刷新元数据，不重载段落，避免打断输入与页面闪烁
+    await useStore.getState().refreshCurrentDocMeta()
   }
 
-  return (
-    <Shell>
+  return shellWrap(
+    <>
       <div style={{ padding: 12, borderBottom: '1px solid var(--border)' }}>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, lineHeight: 1.4 }}>
           {currentDoc.title}
@@ -172,7 +184,8 @@ export default function NotePanel({ width = 300, embedded = false }: { width?: n
             </div>
           ))}
       </div>
-    </Shell>
+    </>,
+    embedded, width,
   )
 }
 
