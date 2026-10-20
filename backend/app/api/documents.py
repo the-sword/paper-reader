@@ -26,7 +26,19 @@ async def upload(file: UploadFile = File(...),
     if len(data) > 200 * 1024 * 1024:
         raise HTTPException(400, "文件超过 200MB")
     folder_ids = [folder_id] if folder_id else None
-    return library.import_bytes(data, file.filename, folder_ids=folder_ids)
+    doc = library.import_bytes(data, file.filename, folder_ids=folder_ids)
+
+    # 新文献自动进入双语 PDF 队列（已存在的不重复入队）
+    if not doc.get("duplicated"):
+        try:
+            from ..services import toqueue
+
+            if toqueue.is_enabled():
+                toqueue.enqueue(doc["id"], doc.get("title") or file.filename)
+        except Exception:  # noqa: BLE001
+            pass  # 入队失败不影响导入
+
+    return doc
 
 
 @router.get("/{doc_id}")

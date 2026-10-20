@@ -4,6 +4,7 @@ import DocumentList from './components/DocumentList'
 import PdfViewer from './components/PdfViewer'
 import SettingsDialog from './components/SettingsDialog'
 import ArxivPanel from './components/ArxivPanel'
+import QueueIndicator from './components/QueueIndicator'
 import RightPanel from './components/RightPanel'
 import Resizer from './components/Resizer'
 import { useStore } from './stores/useStore'
@@ -310,6 +311,8 @@ export default function App() {
               <button className="btn-ghost" title="适应宽度 (0)" onClick={fitWidth}>适应宽度</button>
             </>
           )}
+
+          <QueueIndicator />
 
           <button
             className="btn-ghost"

@@ -127,6 +127,19 @@ export interface Reference {
   year: number | null
   venue: string
 }
+export interface QueueItem {
+  doc_id: string
+  title: string
+  status: 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+  error: string | null
+  progress: number
+}
+export interface QueueSnapshot {
+  enabled: boolean
+  counts: Record<string, number>
+  queue_size: number
+  items: QueueItem[]
+}
 export interface BabelDocJob {
   id: string
   kind: string
@@ -332,6 +345,12 @@ export const api = {
     req<BabelDocJob>(`/reading/babeldoc/job/${jobId}`),
   cancelBabelDoc: (jobId: string) =>
     req<{ ok: boolean }>(`/reading/babeldoc/job/${jobId}/cancel`, { method: 'POST' }),
+  babelDocQueue: () => req<QueueSnapshot>('/reading/babeldoc/queue'),
+  setQueueEnabled: (enabled: boolean) =>
+    req<{ ok: boolean; enabled: boolean }>('/reading/babeldoc/queue/toggle',
+      { method: 'POST', body: JSON.stringify({ enabled }) }),
+  retryQueueItem: (docId: string) =>
+    req<{ ok: boolean }>(`/reading/babeldoc/queue/${docId}/retry`, { method: 'POST' }),
   babelDocStatus: (docId: string) =>
     req<{ generated: boolean; size?: number }>(`/reading/babeldoc/${docId}/status`),
   // 注意：直接返回给 window.open 的地址必须带 /api 前缀（req() 会自动拼，这里不会）

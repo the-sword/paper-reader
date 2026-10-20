@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from ..services import backup as backup_svc
 from ..services import babeldoc as babeldoc_svc
+from ..services import toqueue as queue_svc
 from ..services import jobs as jobs_svc
 from ..services import glossary_cache as term_svc
 from ..services import library
@@ -345,3 +346,46 @@ def get_babeldoc_pdf(doc_id: str) -> Any:
 
     return FileResponse(r["dual"], media_type="application/pdf",
                         filename=f"{doc_id}-bilingual.pdf")
+
+
+# ---------------------------------------------------------------------------
+# 双语 PDF 自动队列
+# ---------------------------------------------------------------------------
+
+class QueueToggleReq(BaseModel):
+    enabled: bool
+
+
+
+@router.get("/babeldoc/queue")
+def queue_snapshot() -> dict[str, Any]:
+    """队列全貌：启停状态、计数、条目列表。"""
+    return queue_svc.snapshot()
+
+
+
+@router.post("/babeldoc/queue/toggle")
+def queue_toggle(body: QueueToggleReq) -> dict[str, Any]:
+    queue_svc.set_enabled(body.enabled)
+    return {"ok": True, "enabled": body.enabled}
+
+
+
+@router.post("/babeldoc/queue/{doc_id}/cancel")
+def queue_cancel(doc_id: str) -> dict[str, Any]:
+    return {"ok": queue_svc.cancel(doc_id)}
+
+
+
+@router.post("/babeldoc/queue/{doc_id}/retry")
+def queue_retry(doc_id: str) -> dict[str, Any]:
+    doc = library.get_document(doc_id)
+    if not doc:
+        raise HTTPException(404, "文献不存在")
+    return {"ok": queue_svc.retry(doc_id, doc["title"])}
+
+
+
+@router.post("/babeldoc/queue/clear")
+def queue_clear() -> dict[str, Any]:
+    return {"ok": True, "cleared": queue_svc.clear_finished()}
