@@ -125,6 +125,55 @@ function citeNumbersAtPoint(clientX: number, clientY: number): number[] | null {
   return null
 }
 
+/**
+ * 兜底：从 PDF 文本层自行提取参考文献。
+ *
+ * 后端参考文献表依赖 MinerU 解析（ref_text 段）。未解析/本地兜底解析的
+ * 文献该表为空，这时直接从 PDF 末尾几页文本里找 References 区，
+ * 按 [n] 标号切分出条目，功能不依赖解析管线。
+ */
+async function extractRefsFromPdf(pdf: PDFDocumentProxy): Promise<Record<number, Reference>> {
+  const out: Record<number, Reference> = {}
+  // 参考文献几乎总在末尾；多取几页覆盖长文献列表
+  const start = Math.max(1, pdf.numPages - 7)
+  let tail = ''
+  for (let p = start; p <= pdf.numPages; p++) {
+    try {
+      const page = await pdf.getPage(p)
+      const tc = await page.getTextContent()
+      for (const it of tc.items as Array<{ str: string }>) tail += it.str + ' '
+    } catch { /* 单页失败不阻断 */ }
+  }
+  const m = /\b(references|bibliography)\b/i.exec(tail)
+  if (!m) return out
+
+  const body = tail.slice(m.index + m[0].length)
+  // 按 [n] 标号切分条目；兼容 "n." 形式留给以后再扩
+  const marks: Array<{ n: number; i: number }> = []
+  const re = /\[(\d{1,3})\]/g
+  let mm: RegExpExecArray | null
+  while ((mm = re.exec(body)) !== null && marks.length < 300) {
+    marks.push({ n: parseInt(mm[1], 10), i: mm.index })
+  }
+  for (let k = 0; k < marks.length; k++) {
+    const { n, i } = marks[k]
+    const end = k + 1 < marks.length ? marks[k + 1].i : Math.min(body.length, i + 1200)
+    const text = body.slice(i + body.slice(i).indexOf(']') + 1, end)
+      .replace(/\s+/g, ' ').trim()
+    // 序号应按 1,2,3… 递增才可信；过滤正文里偶然的 [n]（如公式编号）
+    if (text.length < 15 || n in out) continue
+    if (marks.length > 2 && k > 0 && n !== marks[k - 1].n + 1 && !(n in out)) continue
+    const yearM = /\b(19|20)\d{2}\b/.exec(text)
+    out[n] = {
+      no: n, idx: 0, text, authors: '',
+      title: text.slice(0, 180),
+      year: yearM ? parseInt(yearM[0], 10) : null,
+      venue: '',
+    }
+  }
+  return out
+}
+
 export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -147,20 +196,38 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
 
   // ---- 参考文献气泡（点击正文 [n] 引用标）----
   const [refs, setRefs] = useState<Record<number, Reference>>({})
+  // refsStatus 区分三种情况：加载中 / 加载失败（可重试）/ 已加载（可能为空表）
+  const [refsStatus, setRefsStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [citePopup, setCitePopup] = useState<{
     x: number; y: number; numbers: number[]
   } | null>(null)
 
-  // 参考文献表来自 MinerU 解析出的 segments，切换文档时预取
-  useEffect(() => {
-    setCitePopup(null)
-    if (!currentDoc) { setRefs({}); return }
-    void api.getReferences(currentDoc.id).then((r) => {
+  /** 拉取该文献的参考文献表；失败标记 error，点击引用标时可重试 */
+  const loadRefs = useCallback(() => {
+    const docId = useStore.getState().currentDoc?.id
+    if (!docId) return
+    setRefsStatus('loading')
+    void api.getReferences(docId).then(async (r) => {
       const map: Record<number, Reference> = {}
       for (const x of r.references) map[x.no] = x
+      // 后端没有（未走 MinerU 解析）→ 从 PDF 自身文本兜底提取
+      if (!Object.keys(map).length && pdfRef.current) {
+        const fb = await extractRefsFromPdf(pdfRef.current).catch(() => ({}))
+        Object.assign(map, fb)
+      }
       setRefs(map)
-    }).catch(() => setRefs({}))
-  }, [currentDoc?.id])
+      setRefsStatus('ok')
+    }).catch(() => setRefsStatus('error'))
+  }, [])
+
+  // 参考文献表来自 MinerU 解析出的 segments，切换文档时预取；
+  // 等 numPages 就绪才跑（兜底提取需要 pdfRef.current 已加载）
+  useEffect(() => {
+    setCitePopup(null)
+    setRefs({})
+    if (!currentDoc) { setRefsStatus('idle'); return }
+    loadRefs()
+  }, [currentDoc?.id, numPages, loadRefs])
 
   // ---- 加载文档 ----
   useEffect(() => {
@@ -518,6 +585,8 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
         const numbers = citeNumbersAtPoint(e.clientX, e.clientY)
         if (numbers?.length) {
           setBubble(null)
+          // 表为空（首次加载失败/尚未触发）时点击即重试，不等下一次切文档
+          if (!Object.keys(refs).length && refsStatus !== 'loading') loadRefs()
           setCitePopup({
             // 稍微右移避开弹层水平居中后的遮挡，并防止贴右边缘溢出
             x: Math.min(e.clientX, window.innerWidth - 230),
@@ -585,6 +654,15 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
         >
+          {refsStatus === 'loading' && (
+            <div className="hint">正在加载参考文献…</div>
+          )}
+          {refsStatus === 'error' && (
+            <div className="hint">参考文献加载失败，点击引用标重试</div>
+          )}
+          {refsStatus === 'ok' && !Object.keys(refs).length && (
+            <div className="hint">该文献未识别到参考文献列表</div>
+          )}
           {citePopup.numbers.map((n) => {
             const ref = refs[n]
             return (
@@ -601,9 +679,11 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
                     </div>
                   </>
                 ) : (
-                  <div className="cite-body">
-                    <div className="cite-title">[{n}] 未在该文献的参考文献列表中找到</div>
-                  </div>
+                  refsStatus === 'ok' && Object.keys(refs).length > 0 && (
+                    <div className="cite-body">
+                      <div className="cite-title">[{n}] 未在该文献的参考文献列表中找到</div>
+                    </div>
+                  )
                 )}
               </div>
             )
