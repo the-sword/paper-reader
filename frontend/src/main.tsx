@@ -8,7 +8,18 @@ import './styles/global.css'
 // PWA：注册 service worker（仅生产构建生效；注册失败静默，不影响使用）
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
-    void navigator.serviceWorker.register('/sw.js').catch(() => {
+    void navigator.serviceWorker.register('/sw.js').then((reg) => {
+      // 发现等待中的新 SW（发新版后）→ 立即接管，实现静默自动更新
+      if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING')
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing
+        nw?.addEventListener('statechange', () => {
+          if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+            nw.postMessage('SKIP_WAITING')
+          }
+        })
+      })
+    }).catch(() => {
       /* 注册失败（如非 HTTPS/localhost）忽略 */
     })
   })
