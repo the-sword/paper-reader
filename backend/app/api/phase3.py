@@ -1,6 +1,7 @@
 """阶段三 API：划词翻译、AI 总结、WebDAV 备份。"""
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -231,6 +232,12 @@ class BabelDocReq(BaseModel):
     pages: str | None = None      # 如 "1-5"，空则全部
 
 
+#: 同一文献的运行中 BabelDOC 任务（doc_id -> job_id）。
+#: 重复点击时直接复用该 job，防止同文档并发实例。
+_BABELDOC_RUNNING: dict[str, str] = {}
+_BABELDOC_RUNNING_LOCK = threading.Lock()
+
+
 @router.post("/babeldoc/{doc_id}/start")
 def start_babeldoc(doc_id: str, body: BabelDocReq) -> dict[str, Any]:
     """启动 BabelDOC 双语 PDF 翻译任务。立即返回 job_id，可轮询/取消。"""
@@ -245,6 +252,15 @@ def start_babeldoc(doc_id: str, body: BabelDocReq) -> dict[str, Any]:
     if not pdf:
         raise HTTPException(404, "PDF 文件缺失")
 
+    # 同一文献已有任务在跑：直接返回现有 job_id（幂等，重复点击不另起实例）
+    with _BABELDOC_RUNNING_LOCK:
+        existing_id = _BABELDOC_RUNNING.get(doc_id)
+        if existing_id:
+            existing = jobs_svc.get(existing_id)
+            if existing and existing.status == "running":
+                return {"job_id": existing_id, "status": existing.status}
+            _BABELDOC_RUNNING.pop(doc_id, None)
+
     # 确认 AI 可用
     cfg = babeldoc_svc.get_ai_config_for_babeldoc()
 
@@ -253,6 +269,32 @@ def start_babeldoc(doc_id: str, body: BabelDocReq) -> dict[str, Any]:
     def _work(job: jobs_svc.Job) -> dict[str, Any]:
         job.progress = 15
         job.message = "BabelDOC 解析与翻译中（视论文长度 1-5 分钟）"
+
+        # 登记为本文档的运行中任务；结束时注销
+        with _BABELDOC_RUNNING_LOCK:
+            _BABELDOC_RUNNING[doc_id] = job.id
+
+        def _mark_waiting() -> None:
+            job.message = "排队中：另一篇双语 PDF 正在生成…"
+
+        from ..services.translate import Cancelled
+
+        try:
+            # 全局串行：等上一篇翻完才进入 BabelDOC（取消等待会抛 Cancelled）
+            if not babeldoc_svc.acquire_translate_lock(
+                cancel_event=job.cancel, on_wait=_mark_waiting,
+            ):
+                raise Cancelled("排队等待中被取消")
+            try:
+                return _do_translate(job)
+            finally:
+                babeldoc_svc.TRANSLATE_LOCK.release()
+        finally:
+            with _BABELDOC_RUNNING_LOCK:
+                if _BABELDOC_RUNNING.get(doc_id) == job.id:
+                    _BABELDOC_RUNNING.pop(doc_id, None)
+
+    def _do_translate(job: jobs_svc.Job) -> dict[str, Any]:
 
         # BabelDOC 的 overall_progress 分阶段会回跳，只取历史最大值
         _max_seen = [15.0]

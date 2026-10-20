@@ -15,7 +15,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { TextLayer } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { useStore } from '../stores/useStore'
-import { api, type Annotation } from '../api/client'
+import { api, type Annotation, type Reference } from '../api/client'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
@@ -42,6 +42,89 @@ interface Bubble {
   transError?: string
 }
 
+// ---------------------------------------------------------------------------
+// 引用标检测（参考文献气泡）
+// 与 RichText.splitCitations 同一套规则：[1]、[1,2]、[3-6]，排除纯文字方括号
+// ---------------------------------------------------------------------------
+const CITE_RE = /\[(\d{1,3}(?:\s*[,\-–]\s*\d{1,3})*)\]/g
+
+/** 把 "1,2"、"3-6" 展开成编号数组 */
+function parseCiteNumbers(inner: string): number[] {
+  const numbers: number[] = []
+  for (const part of inner.split(',')) {
+    const seg = part.trim()
+    const range = /^(\d+)\s*[-–]\s*(\d+)$/.exec(seg)
+    if (range) {
+      const a = parseInt(range[1], 10)
+      const b = parseInt(range[2], 10)
+      if (b >= a && b - a < 30) {
+        for (let i = a; i <= b; i++) numbers.push(i)
+        continue
+      }
+    }
+    const n = parseInt(seg, 10)
+    if (!Number.isNaN(n)) numbers.push(n)
+  }
+  return numbers
+}
+
+/**
+ * 判断 PDF 文本层点击位置是否落在引用标上。
+ *
+ * pdf.js 常把 "[12]" 拆进多个相邻 span，只看命中的那个 span 会漏，
+ * 因此以命中节点为中心向前后兄弟 span 各扩展约 40 字符拼出上下文，
+ * 再检查点击偏移是否落在某个 [n] 匹配内部。
+ */
+function citeNumbersAtPoint(clientX: number, clientY: number): number[] | null {
+  const doc = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
+  }
+  let node: Node | null = null
+  let offset = 0
+  if (doc.caretRangeFromPoint) {
+    const r = doc.caretRangeFromPoint(clientX, clientY)
+    if (r) { node = r.startContainer; offset = r.startOffset }
+  } else if (doc.caretPositionFromPoint) {
+    const p = doc.caretPositionFromPoint(clientX, clientY)
+    if (p) { node = p.offsetNode; offset = p.offset }
+  }
+  if (!node || node.nodeType !== Node.TEXT_NODE) return null
+  const span = (node as Text).parentElement
+  if (!span?.closest('.textLayer')) return null
+
+  const pieces: string[] = [span.textContent ?? '']
+  let clickIdx = offset
+  let prev = span.previousElementSibling
+  let added = 0
+  while (prev && added < 40) {
+    const t = prev.textContent ?? ''
+    pieces.unshift(t)
+    clickIdx += t.length
+    added += t.length
+    prev = prev.previousElementSibling
+  }
+  let next = span.nextElementSibling
+  added = 0
+  while (next && added < 40) {
+    const t = next.textContent ?? ''
+    pieces.push(t)
+    added += t.length
+    next = next.nextElementSibling
+  }
+  const ctx = pieces.join('')
+
+  CITE_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = CITE_RE.exec(ctx)) !== null) {
+    if (m.index > clickIdx) break
+    if (clickIdx <= m.index + m[0].length) {
+      return parseCiteNumbers(m[1])
+    }
+  }
+  return null
+}
+
 export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -56,6 +139,28 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
   const [loading, setLoading] = useState(false)
   const [bubble, setBubble] = useState<Bubble | null>(null)
   const [color, setColor] = useState(COLORS[0])
+
+  // 虚拟化渲染：页面渲染完成时才创建标注层，
+  // 渲染回调里需要拿到最新 annotations（不能闭包捕获旧值）
+  const annotationsRef = useRef<Annotation[]>(annotations)
+  annotationsRef.current = annotations
+
+  // ---- 参考文献气泡（点击正文 [n] 引用标）----
+  const [refs, setRefs] = useState<Record<number, Reference>>({})
+  const [citePopup, setCitePopup] = useState<{
+    x: number; y: number; numbers: number[]
+  } | null>(null)
+
+  // 参考文献表来自 MinerU 解析出的 segments，切换文档时预取
+  useEffect(() => {
+    setCitePopup(null)
+    if (!currentDoc) { setRefs({}); return }
+    void api.getReferences(currentDoc.id).then((r) => {
+      const map: Record<number, Reference> = {}
+      for (const x of r.references) map[x.no] = x
+      setRefs(map)
+    }).catch(() => setRefs({}))
+  }, [currentDoc?.id])
 
   // ---- 加载文档 ----
   useEffect(() => {
@@ -93,10 +198,11 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
     }
   }, [url, onBaseWidth])
 
-  // ---- 虚拟化逐页渲染 ----
-  // 策略：同步建好全部页面占位（正确的宽高 → 滚动条立即稳定），
-  // 用 IntersectionObserver 只对进入视口附近（rootMargin 预扩 2 屏）的页面
-  // 做 canvas + 文本层渲染；已渲染页面离开视口后保留，避免回滚重复渲染。
+  // ---- 优先级渲染队列 ----
+  // 同步建好全部页面占位（正确的宽高 → 滚动条立即稳定、首屏立即可交互），
+  // 所有页按文档顺序进队列后台渲染（最多 2 页并行）；
+  // 进入视口附近（前后 2 屏）的页插队到队首优先渲染。
+  // 效果：首屏快 + 滚动到任何位置内容都大概率已就绪，不再顿挫。
   useEffect(() => {
     if (!numPages || !hostRef.current) return
     const pdf = pdfRef.current
@@ -108,6 +214,38 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
     // pdf.js 文本层 span 用 calc(var(--scale-factor) * N px) 定位，
     // 必须在页面容器上声明该变量，否则定位整体漂移（框选错位）
     host.style.setProperty('--scale-factor', String(scale))
+
+    // --- 渲染队列：全部页按文档顺序后台渲染，进入视口的页插队到队首；
+    //     最多 2 页并行（pdf.js worker 本就串行，再开多只会互相争抢）。
+    //     对比旧实现：占位页让滚动高度立即可用 + 可视区永远优先渲染 ---
+    const pending: HTMLElement[] = []
+    const inFlight = new Set<number>()
+
+    const queuePage = (el: HTMLElement, urgent = false) => {
+      if (el.dataset.rendered || inFlight.has(Number(el.dataset.page))) return
+      const idx = pending.indexOf(el)
+      if (urgent) {
+        if (idx >= 0) pending.splice(idx, 1)
+        pending.unshift(el)
+      } else if (idx < 0) {
+        pending.push(el)
+      }
+      scheduleDrain()
+    }
+
+    const scheduleDrain = () => {
+      if (cancelled) return
+      while (inFlight.size < 2 && pending.length) {
+        const el = pending.shift()!
+        const pageNum = Number(el.dataset.page)
+        if (el.dataset.rendered) continue
+        inFlight.add(pageNum)
+        void renderPage(el, pageNum).finally(() => {
+          inFlight.delete(pageNum)
+          scheduleDrain()
+        })
+      }
+    }
 
     /** 单页完整渲染（canvas + 文本层 + 选区哨兵）；幂等，渲染过即跳过 */
     const renderPage = async (pageEl: HTMLElement, pageNum: number) => {
@@ -156,10 +294,34 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
         const eoc = document.createElement('div')
         eoc.className = 'endOfContent'
         textLayerEl.appendChild(eoc)
+
+        // 标注要在该页渲染完成后补上（虚拟化后标注层随渲染创建）
+        drawPageAnnotations(annLayer, pageNum)
       } catch (e) {
         // 渲染中断（组件卸载/快速缩放）时撤销标记，下次进入视口可重试
         pageEl.dataset.rendered = ''
         if (!cancelled) console.error(`第 ${pageNum} 页渲染失败`, e)
+      }
+    }
+
+    /** 绘制指定页的标注（虚拟化后标注层随渲染才存在） */
+    const drawPageAnnotations = (layer: HTMLElement, pageNum: number) => {
+      const anns = annotationsRef.current.filter((a) => a.page === pageNum)
+      for (const a of anns) {
+        for (const r of a.rects) {
+          const el = document.createElement('div')
+          el.className = 'ann-rect'
+          el.title = `${a.quote ?? ''}${a.comment ? `\n\n${a.comment}` : ''}`
+          el.style.left = `${r[0] * 100}%`
+          el.style.top = `${r[1] * 100}%`
+          el.style.width = `${(r[2] - r[0]) * 100}%`
+          el.style.height = `${(r[3] - r[1]) * 100}%`
+          el.style.background = `${a.color}59`
+          el.style.borderBottom = `2px solid ${a.color}`
+          el.dataset.annId = a.id
+          el.addEventListener('dblclick', () => { void removeAnnotation(a.id) })
+          layer.appendChild(el)
+        }
       }
     }
 
@@ -191,33 +353,23 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
         pageEls.push(pageEl)
       }
 
-      // IntersectionObserver：进入视口前后 2 屏即渲染
+      // IntersectionObserver：进入视口前后 2 屏即渲染（可见区优先出队）
       const io = new IntersectionObserver(
         (entries) => {
           for (const en of entries) {
             if (!en.isIntersecting) continue
             const el = en.target as HTMLElement
             io.unobserve(el)
-            const pageNum = Number(el.dataset.page)
-            void renderPage(el, pageNum).then(() => {
-              // 渲染后校正为真实尺寸（双语/混合文档页面尺寸可能不同）
-              if (el.dataset.needSize) {
-                const c = el.querySelector('canvas')
-                if (c && c.style.width) {
-                  el.style.width = c.style.width
-                  el.style.height = c.style.height
-                  el.dataset.needSize = ''
-                }
-              }
-            })
+            queuePage(el, true)
           }
         },
-        // scroll 容器是 .viewer-wrap 的可滚动祖先链；rootMargin 以视口为准
         { root: null, rootMargin: '200% 0px' },
       )
       pageEls.forEach((el) => io.observe(el))
-      // 清理函数挂到 host 上，供 effect 卸载时断开
       ;(host as HTMLElement & { __pageIO?: IntersectionObserver }).__pageIO = io
+
+      // 全部页按文档顺序进队后台渲染；IO 命中的可见页会插队到队首优先出队
+      pageEls.forEach((el) => queuePage(el))
     }
 
     void setup()
@@ -357,6 +509,25 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
         const layer = (e.target as HTMLElement).closest('.textLayer')
         layer?.classList.add('selecting')
       }}
+      onClick={(e) => {
+        // 弹层内部点击不处理（自行 stopPropagation，这里兜底）
+        if ((e.target as HTMLElement).closest('.cite-popup')) return
+        // 刚框选完（选区未折叠）不触发引用查询，等下一次单击
+        const sel = window.getSelection()
+        if (sel && !sel.isCollapsed) return
+        const numbers = citeNumbersAtPoint(e.clientX, e.clientY)
+        if (numbers?.length) {
+          setBubble(null)
+          setCitePopup({
+            // 稍微右移避开弹层水平居中后的遮挡，并防止贴右边缘溢出
+            x: Math.min(e.clientX, window.innerWidth - 230),
+            y: e.clientY + 8,
+            numbers,
+          })
+        } else {
+          setCitePopup(null)
+        }
+      }}
     >
       {loading && <div className="viewer-hint">正在加载 PDF…</div>}
       <div className="canvas-host" ref={hostRef} />
@@ -403,6 +574,41 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
             <button className="btn-ghost" onClick={confirmHighlight}>高亮</button>
             <button className="btn-ghost" onClick={() => setBubble(null)}>取消</button>
           </div>
+        </div>
+      )}
+
+      {/* 参考文献弹层：点击正文 [n] 引用标弹出（与原双语阅读页同款） */}
+      {citePopup && (
+        <div
+          className="cite-popup"
+          style={{ position: 'fixed', left: citePopup.x, top: citePopup.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {citePopup.numbers.map((n) => {
+            const ref = refs[n]
+            return (
+              <div key={n} className="cite-item">
+                {ref ? (
+                  <>
+                    <div className="cite-no">[{n}]</div>
+                    <div className="cite-body">
+                      <div className="cite-title">{ref.title || ref.text.slice(0, 120)}</div>
+                      {ref.authors && <div className="cite-authors">{ref.authors}</div>}
+                      <div className="cite-meta">
+                        {ref.year ?? ''}{ref.venue ? ` · ${ref.venue}` : ''}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="cite-body">
+                    <div className="cite-title">[{n}] 未在该文献的参考文献列表中找到</div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          <button className="btn-ghost cite-close" onClick={() => setCitePopup(null)}>✕</button>
         </div>
       )}
     </div>

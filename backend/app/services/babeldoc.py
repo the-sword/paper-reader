@@ -22,6 +22,30 @@ from ..core.config import get_settings
 from ..core.db import db
 from . import translate as ai_mod
 
+#: 全局互斥：同一进程同时只允许一个 BabelDOC 实例。
+#: ONNX 版面解析单实例峰值 ~300MB，并发实例会把 2C VPS 打满，
+#: 手动触发的 job 与导入自动队列共用此锁，保证「自始至终只有一个」。
+TRANSLATE_LOCK = threading.Lock()
+
+
+def acquire_translate_lock(
+    cancel_event: threading.Event | None = None,
+    on_wait: Any = None,
+) -> bool:
+    """取消感知地获取全局翻译锁。
+
+    每 0.5s 轮询一次取消标志；首次发现需要等待时回调一次 on_wait
+    （供调用方更新「排队中」提示）。返回是否成功获取。
+    """
+    notified = False
+    while not TRANSLATE_LOCK.acquire(timeout=0.5):
+        if cancel_event is not None and cancel_event.is_set():
+            return False
+        if not notified and on_wait is not None:
+            on_wait()
+            notified = True
+    return True
+
 # ---------------------------------------------------------------------------
 # 跳过翻译：标题 + 参考文献 + 致谢
 #

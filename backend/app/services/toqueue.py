@@ -168,6 +168,12 @@ def _run_one(item: QueueItem) -> None:
         if pct > 0:
             item.progress = max(item.progress, pct)
 
+    # 与手动 start 接口共用全局锁：手动任务正在跑时排队等待，
+    # 保证全进程同时只有一个 BabelDOC 实例
+    if not bd.acquire_translate_lock(cancel_event=_CANCEL_CURRENT):
+        _CANCEL_CURRENT.set()  # 让 _worker_loop 把本条标记为 skipped
+        return
+
     import asyncio
 
     async def _a():
@@ -181,6 +187,7 @@ def _run_one(item: QueueItem) -> None:
     try:
         loop.run_until_complete(_a())
     finally:
+        bd.TRANSLATE_LOCK.release()
         loop.close()
 
 
