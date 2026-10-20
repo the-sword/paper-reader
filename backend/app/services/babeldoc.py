@@ -12,12 +12,175 @@ do_translate_async_stream 获取实时进度事件。
 from __future__ import annotations
 
 import asyncio
+import os
+import re
+import threading
 from pathlib import Path
 from typing import Any
 
 from ..core.config import get_settings
 from ..core.db import db
 from . import translate as ai_mod
+
+# ---------------------------------------------------------------------------
+# 跳过翻译：标题 + 参考文献 + 致谢
+#
+# babeldoc 0.6.x（pdf2zh-next 2.9.0 锁定 <0.7.0）没有官方的「不译标题/参考
+# 文献」选项；官方在新版才加入按布局跳过的能力。这里对翻译器打运行时补丁：
+#   1. 段落 layout_label 命中跳过集合（标题类 + reference 类）→ 不翻译
+#   2. 翻译开始前对全文档按顺序扫描，遇到 References/Bibliography/
+#      Acknowledgements/致谢 等独立标题行后，其后段落统一标记为 reference
+#      跳过（覆盖 DocLayout 模型把参考文献误分类为 text/paragraph 的情况）
+#
+# 关键：pdf2zh-next 对支持 LLM 的引擎走 ILTranslatorLLMOnly（独立类，
+# 自带 translate/process_page），两条路径仅在 pre_translate_paragraph
+# 上汇合；因此跳过判定放 pre_translate_paragraph，区域标记放两条路径
+# 各自的 translate() 入口。pre_translate_paragraph 返回 (None, None) 时
+# BabelDOC 原样保留段落，不调 LLM、不改排版。
+# ---------------------------------------------------------------------------
+
+#: 默认跳过翻译的布局标签（逗号分隔，可用 PAPER_READER_SKIP_LAYOUTS 覆盖）
+_SKIP_LAYOUTS_DEFAULT = (
+    "doc_title,title,paragraph_title,"
+    "reference,reference_content,reference_hybrid"
+)
+
+#: References / 致谢 区起始标题（独立短行才算，避免误伤正文句子）
+_REF_HEADING_RE = re.compile(
+    r"^\s*(references?|bibliography|literature\s+cited|works\s+cited"
+    r"|acknowledgements?|acknowledgments?"
+    r"|参考文献|引用文献|参考资料|致谢)\s*:?\s*$",
+    re.IGNORECASE,
+)
+
+#: 附录关键词（行首）
+_APPENDIX_KW_RE = re.compile(r"^(appendix|appendices|annex|附录)", re.IGNORECASE)
+
+#: 附录标题里的编号（A / A.1 / B2 等）
+_APPENDIX_DESIG_RE = re.compile(r"([A-Za-z0-9]{1,3}(?:\.\d+)*)\s*([:：.．\-–—]?)\s*(.*)")
+
+_patch_lock = threading.Lock()
+_patch_applied = False
+
+
+def _skip_layout_set() -> frozenset[str]:
+    """解析环境变量得到本次要跳过的布局标签集合。"""
+    raw = os.environ.get("PAPER_READER_SKIP_LAYOUTS", _SKIP_LAYOUTS_DEFAULT)
+    return frozenset(s.strip() for s in raw.split(",") if s.strip())
+
+
+def _ref_section_enabled() -> bool:
+    """References/致谢 区域检测开关（默认开，0 关闭）。"""
+    return os.environ.get("PAPER_READER_SKIP_REF_SECTION", "1") == "1"
+
+
+def _appendix_resume_enabled() -> bool:
+    """附录边界恢复翻译开关（默认开，0 关闭）。"""
+    return os.environ.get("PAPER_READER_RESUME_APPENDIX", "1") == "1"
+
+
+def _is_appendix_heading(text: str) -> bool:
+    """判断一行文本是否为附录标题。
+
+    接受形态：Appendix / Appendix A / Appendix A: Proofs / Appendix: Proofs
+    / 附录 / 附录A / 附录A：证明。
+    拒绝正文句子（如 "Appendix A contains the details"）：带标题文字时
+    必须有分隔符（冒号/破折号等），避免误恢复已跳过区域。
+    """
+    m = _APPENDIX_KW_RE.match(text)
+    if not m:
+        return False
+    rest = text[m.end():].strip()
+    if not rest:
+        return True
+    # 「Appendix: Proofs」「附录：证明」：分隔符直接跟在关键词后
+    if rest[:1] in ":：.．-–—" and len(rest) > 1:
+        return True
+    # 「Appendix A」「附录A1」「Appendix A: Proofs」：编号（可带分隔符+标题）
+    dm = _APPENDIX_DESIG_RE.match(rest)
+    if dm:
+        sep, title = dm.group(2).strip(), dm.group(3).strip()
+        if not title or sep:
+            return True
+    return False
+
+
+def _mark_reference_sections(docs: Any) -> None:
+    """按文档顺序扫描段落，把 References/致谢 区之后的段落标记为 reference。
+
+    遇到附录标题即恢复翻译（后续段落保持原布局标签，正常送翻）。
+    必须在 ILTranslator / ILTranslatorLLMOnly 的 translate() 入口、任何
+    段落处理开始之前执行，才能覆盖跨页段落与批量分组。
+    """
+    if not _ref_section_enabled():
+        return
+    resume = _appendix_resume_enabled()
+    in_refs = False
+    for page in getattr(docs, "page", None) or []:
+        for para in getattr(page, "pdf_paragraph", None) or []:
+            text = (getattr(para, "unicode", "") or "").strip()
+            if in_refs:
+                # 附录标题 → 恢复该段落及其后段落的翻译
+                if resume and len(text) <= 100 and _is_appendix_heading(text):
+                    in_refs = False
+                else:
+                    para.layout_label = "reference"
+            elif len(text) <= 40 and _REF_HEADING_RE.match(text):
+                # 区域标题行本身也不翻译，其后段落一并跳过
+                para.layout_label = "reference"
+                in_refs = True
+
+
+def _apply_skip_translation_patch() -> None:
+    """给 babeldoc 翻译器打「跳过标题/参考文献/致谢」补丁（幂等、线程安全）。
+
+    只包装方法、命中条件时提前返回，不改变原调用签名；
+    babeldoc 内部结构变化时对应包装自动不生效（getattr 防御），
+    不影响正常翻译。
+    """
+    global _patch_applied
+    with _patch_lock:
+        if _patch_applied:
+            return
+        try:
+            import logging
+
+            from babeldoc.format.pdf.document_il.midend import (
+                il_translator as _it,
+            )
+            from babeldoc.format.pdf.document_il.midend import (
+                il_translator_llm_only as _it_llm,
+            )
+
+            skip_set = _skip_layout_set()
+            orig_pre = _it.ILTranslator.pre_translate_paragraph
+
+            def _pre_wrapper(self, paragraph, *args, **kwargs):
+                if getattr(paragraph, "layout_label", None) in skip_set:
+                    return None, None
+                return orig_pre(self, paragraph, *args, **kwargs)
+
+            _it.ILTranslator.pre_translate_paragraph = _pre_wrapper
+
+            # 两条翻译路径的 translate() 入口都做区域标记
+            # - ILTranslator：非 LLM 引擎 / fallback 路径
+            # - ILTranslatorLLMOnly：pdf2zh-next 对支持 LLM 的引擎的默认路径
+            #   （它内部持有 ILTranslator 实例并复用其 pre_translate_paragraph）
+            for cls in (_it.ILTranslator, getattr(_it_llm, "ILTranslatorLLMOnly", None)):
+                if cls is None:
+                    continue
+                orig_translate = cls.translate
+
+                def _translate_wrapper(self, docs, *args, **kwargs):
+                    _mark_reference_sections(docs)
+                    return orig_translate(self, docs, *args, **kwargs)
+
+                cls.translate = _translate_wrapper
+            _patch_applied = True
+        except Exception as exc:  # noqa: BLE001 - 补丁失败仅告警，不阻断翻译
+            logging.getLogger(__name__).warning(
+                "跳过标题/参考文献补丁未生效（babeldoc 版本不兼容？）: %s", exc
+            )
 
 
 def is_available() -> tuple[bool, str]:
@@ -83,6 +246,9 @@ async def translate_pdf_async(
     ok, reason = is_available()
     if not ok:
         raise RuntimeError(reason)
+
+    # 跳过标题/参考文献（可在环境变量里关闭/自定义）
+    _apply_skip_translation_patch()
 
     from pdf2zh_next import high_level
 
@@ -186,10 +352,36 @@ async def translate_pdf_async(
 
     t = threading.Thread(target=_thread_main, name="babeldoc", daemon=True)
     t.start()
+
+    # 心跳与阶段提示：BabelDOC 版面解析阶段（CPU 密集，可达数分钟）不发任何
+    # 进度事件，调用方若只靠事件更新进度会长时间停留在初始值，看起来像卡死。
+    # 这里线程存活期间持续回调：有事件走事件进度，无事件给心跳 + 阶段文案。
+    import time as _time
+
+    _start = _time.monotonic()
+    _last_event = [_start]  # 最近一次收到进度事件的单调时间
+
+    def _progress_capture(pct: float, msg: str) -> None:
+        if pct > 0:
+            _last_event[0] = _time.monotonic()
+        if on_progress:
+            on_progress(pct, msg)
+
+    # 用 _progress_capture 替换后续实际转发（_run 里引用的是 on_progress 参数，
+    # Python 闭包按名字查找，直接重绑局部名即可）
+    on_progress = _progress_capture
+
     while t.is_alive():
         t.join(timeout=0.5)
+        if cancel_event is not None and cancel_event.is_set():
+            break
         if on_progress:
-            on_progress(-1, "")  # 心跳，让调用方维持轮询
+            idle = _time.monotonic() - _last_event[0]
+            if idle >= 5:
+                mins = int(idle // 60)
+                hint = f"版面解析中（已 {mins} 分钟，大文档/CPU 较慢属正常）" if idle >= 60 \
+                    else "版面解析中…"
+                on_progress(-1, hint)  # 心跳，让调用方维持轮询
 
     # 恢复环境变量
     for k, v in saved_proxy.items():
