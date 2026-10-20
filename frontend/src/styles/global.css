@@ -101,6 +101,12 @@ input:focus, textarea:focus { border-color: var(--accent); }
   user-select: text;
 }
 
+/* 虚拟化占位页：未渲染出 canvas 前给浅灰底与最小反馈 */
+.pdf-page-placeholder {
+  background: var(--bg-card, #e2e8f0);
+  contain: layout size style;
+}
+
 .pdf-canvas { display: block; }
 
 /* 标注层：在文本层之下，不接收鼠标事件（避免挡住文本选择） */

@@ -93,7 +93,10 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
     }
   }, [url, onBaseWidth])
 
-  // ---- 逐页渲染 ----
+  // ---- 虚拟化逐页渲染 ----
+  // 策略：同步建好全部页面占位（正确的宽高 → 滚动条立即稳定），
+  // 用 IntersectionObserver 只对进入视口附近（rootMargin 预扩 2 屏）的页面
+  // 做 canvas + 文本层渲染；已渲染页面离开视口后保留，避免回滚重复渲染。
   useEffect(() => {
     if (!numPages || !hostRef.current) return
     const pdf = pdfRef.current
@@ -101,26 +104,21 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
 
     const host = hostRef.current
     let cancelled = false
+    const ratio = Math.min(window.devicePixelRatio || 1, 2)
+    // pdf.js 文本层 span 用 calc(var(--scale-factor) * N px) 定位，
+    // 必须在页面容器上声明该变量，否则定位整体漂移（框选错位）
+    host.style.setProperty('--scale-factor', String(scale))
 
-    const run = async () => {
-      host.innerHTML = ''
-      const ratio = Math.min(window.devicePixelRatio || 1, 2)
-      // pdf.js 文本层 span 用 calc(var(--scale-factor) * N px) 定位，
-      // 必须在每个页面容器上声明该变量，否则定位整体漂移（框选错位）
-      host.style.setProperty('--scale-factor', String(scale))
-
-      for (let i = 1; i <= numPages; i++) {
+    /** 单页完整渲染（canvas + 文本层 + 选区哨兵）；幂等，渲染过即跳过 */
+    const renderPage = async (pageEl: HTMLElement, pageNum: number) => {
+      if (pageEl.dataset.rendered) return
+      pageEl.dataset.rendered = '1'
+      try {
+        const page = await pdf.getPage(pageNum)
         if (cancelled) return
-        const page = await pdf.getPage(i)
         const vp = page.getViewport({ scale })
 
-        const pageEl = document.createElement('div')
-        pageEl.className = 'pdf-page'
-        pageEl.dataset.page = String(i)
-        pageEl.style.width = `${vp.width}px`
-        pageEl.style.height = `${vp.height}px`
-
-        // 1) canvas 渲染
+        // 1) canvas
         const canvas = document.createElement('canvas')
         canvas.width = Math.floor(vp.width * ratio)
         canvas.height = Math.floor(vp.height * ratio)
@@ -131,24 +129,19 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
         // 2) 透明文本层（可选中）
         const textLayerEl = document.createElement('div')
         textLayerEl.className = 'textLayer'
-        textLayerEl.style.width = `${vp.width}px`
-        textLayerEl.style.height = `${vp.height}px`
         pageEl.appendChild(textLayerEl)
 
         // 3) 标注层
         const annLayer = document.createElement('div')
         annLayer.className = 'ann-layer'
-        annLayer.dataset.page = String(i)
+        annLayer.dataset.page = String(pageNum)
         pageEl.appendChild(annLayer)
-
-        host.appendChild(pageEl)
 
         await page.render({
           canvasContext: canvas.getContext('2d')!,
           viewport: vp,
           canvas,
         } as never).promise
-
         if (cancelled) return
 
         const textContent = await page.getTextContent()
@@ -159,16 +152,79 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
         })
         await textLayer.render()
 
-        // 官方 viewer 的选区哨兵：位于页面底部下方的不可选元素。
-        // 框选下移越过页面底边时先命中它，浏览器就不会把选区锚点跳回页首
+        // 官方 viewer 的选区哨兵：框选下移越过页面底边时不跳回页首
         const eoc = document.createElement('div')
         eoc.className = 'endOfContent'
         textLayerEl.appendChild(eoc)
+      } catch (e) {
+        // 渲染中断（组件卸载/快速缩放）时撤销标记，下次进入视口可重试
+        pageEl.dataset.rendered = ''
+        if (!cancelled) console.error(`第 ${pageNum} 页渲染失败`, e)
       }
     }
 
-    void run()
-    return () => { cancelled = true }
+    const setup = async () => {
+      host.innerHTML = ''
+      // 第一遍：同步建占位页。首页尺寸先渲染出来再定其余页的占位高度，
+      // 避免逐页 await getPage 造成长文档首屏白屏数秒。
+      let firstVpW = 612
+      let firstVpH = 792
+      try {
+        const p1 = await pdf.getPage(1)
+        const v1 = p1.getViewport({ scale: 1 })
+        firstVpW = v1.width
+        firstVpH = v1.height
+      } catch { /* 用默认尺寸兜底 */ }
+      if (cancelled) return
+
+      const pageEls: HTMLElement[] = []
+      for (let i = 1; i <= numPages; i++) {
+        const pageEl = document.createElement('div')
+        pageEl.className = 'pdf-page pdf-page-placeholder'
+        pageEl.dataset.page = String(i)
+        // 近似尺寸：同文档页面绝大多数一致（双语 PDF 尤其如此）。
+        // 真实视口在渲染该页时以实际尺寸为准替换占位样式。
+        pageEl.style.width = `${firstVpW * scale}px`
+        pageEl.style.height = `${firstVpH * scale}px`
+        pageEl.dataset.needSize = '1'
+        host.appendChild(pageEl)
+        pageEls.push(pageEl)
+      }
+
+      // IntersectionObserver：进入视口前后 2 屏即渲染
+      const io = new IntersectionObserver(
+        (entries) => {
+          for (const en of entries) {
+            if (!en.isIntersecting) continue
+            const el = en.target as HTMLElement
+            io.unobserve(el)
+            const pageNum = Number(el.dataset.page)
+            void renderPage(el, pageNum).then(() => {
+              // 渲染后校正为真实尺寸（双语/混合文档页面尺寸可能不同）
+              if (el.dataset.needSize) {
+                const c = el.querySelector('canvas')
+                if (c && c.style.width) {
+                  el.style.width = c.style.width
+                  el.style.height = c.style.height
+                  el.dataset.needSize = ''
+                }
+              }
+            })
+          }
+        },
+        // scroll 容器是 .viewer-wrap 的可滚动祖先链；rootMargin 以视口为准
+        { root: null, rootMargin: '200% 0px' },
+      )
+      pageEls.forEach((el) => io.observe(el))
+      // 清理函数挂到 host 上，供 effect 卸载时断开
+      ;(host as HTMLElement & { __pageIO?: IntersectionObserver }).__pageIO = io
+    }
+
+    void setup()
+    return () => {
+      cancelled = true
+      ;(host as HTMLElement & { __pageIO?: IntersectionObserver }).__pageIO?.disconnect()
+    }
   }, [numPages, scale])
 
   // ---- 标注绘制 ----

@@ -309,6 +309,16 @@ export default function App() {
               }}
               disabled={bdRunning}
             >{bdRunning ? '生成中' : '双语PDF'}</button>
+            {/* 已生成双语 PDF 时提供下载（带访问口令，与页内阅读同源鉴权） */}
+            {view === 'bilingual' && bdReady[currentDoc.id] && (
+              <a
+                className="seg"
+                style={{ textDecoration: 'none' }}
+                title="下载双语 PDF 文件"
+                href={api.babelDocPdfUrl(currentDoc.id)}
+                download
+              >下载</a>
+            )}
           </div>
         )}
 
