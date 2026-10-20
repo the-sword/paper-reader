@@ -130,11 +130,15 @@ export default function App() {
     }
   }, [readerPrefs.theme])
 
-  // 进入/退出专注模式时可用宽度变化，重新适应
+  // 进入/退出专注模式时可用宽度变化 → 重新适应宽度。
+  // 注意：不能把 baseWidth 置 null，否则 fitWidth 会因缺少基准而直接 return，
+  // 表现为「适应宽度失效」。这里保留基准，仅重新计算缩放。
+  const focusFirstRun = useRef(true)
   useEffect(() => {
-    setBaseWidth(null)
-    lastFitFor.current = null
-  }, [focusMode])
+    if (focusFirstRun.current) { focusFirstRun.current = false; return }
+    const t = window.setTimeout(() => fitWidth(), 50)
+    return () => window.clearTimeout(t)
+  }, [focusMode, fitWidth])
 
   /** 面板布局保存的防抖 timer */
   const panelSaveTimer = useRef<number | null>(null)
@@ -312,10 +316,10 @@ export default function App() {
           {/* 专注阅读：一键收起两侧栏 */}
           <button
             className={`btn-ghost ${focusMode ? 'active' : ''}`}
-            style={{ padding: '4px 8px', fontSize: 13 }}
+            style={{ padding: '4px 8px', fontSize: 11 }}
             title={focusMode ? '退出专注模式 (Esc)' : '专注阅读：收起两侧栏'}
             onClick={() => setFocusMode((v) => !v)}
-          >{focusMode ? '⤢' : '⛶'}</button>
+          >{focusMode ? '收起' : '专注'}</button>
 
           {/* 全局主题与排版 */}
           <ReaderSettings value={readerPrefs} onChange={setReaderPrefs} />
