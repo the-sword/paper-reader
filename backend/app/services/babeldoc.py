@@ -82,6 +82,17 @@ async def translate_pdf_async(
     out_dir = s.parsed_dir / doc_id / "babeldoc"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # --- VPS 优化：按 CPU 核数自适应并发 ---
+    # 翻译是 IO 密集型（等 API），但排版/字体处理是 CPU 密集型。
+    # 2 核机器上 qps 开太高会导致线程争抢，反而变慢。
+    import os as _os2
+
+    cpu = _os2.cpu_count() or 2
+    qps = max(2, min(8, cpu * 2))
+    # 关闭自动术语提取：省一轮 LLM 调用（成本和时间都省），
+    # 个人阅读场景术语表收益有限。
+    auto_glossary = _os2.environ.get("PAPER_READER_BABEL_GLOSSARY", "0") == "1"
+
     settings = SettingsModel(
         basic={
             "input_files": {str(pdf_path)},
@@ -91,7 +102,9 @@ async def translate_pdf_async(
             "lang_in": "en",
             "lang_out": "zh",
             "output": str(out_dir),
-            "qps": 4,
+            "qps": qps,
+            "no_auto_extract_glossary": not auto_glossary,
+            "pool_max_workers": max(2, cpu),
         },
         pdf=PDFSettings(
             pages=pages,

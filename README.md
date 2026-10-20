@@ -274,3 +274,80 @@ cd frontend && VITE_AUTH_TOKEN='新口令' npm run build && cd .. && ./deploy.sh
 - DOI 反查依赖 Crossref 标题 + arXiv 标题相似度，无 arXiv 版本的论文找不到
 - AI 引擎全量重翻一篇 180 段论文约 20-30 分钟（机翻约 30 秒）
 - 划词翻译的 Google/Bing 免费端点不稳定，可能失效
+
+---
+
+## 2C2G VPS 优化
+
+针对入门级 VPS（2 核 2G）做了以下适配：
+
+### 实测资源占用
+
+| 指标 | 数值 |
+|---|---|
+| 服务常驻内存 | ~150 MB |
+| BabelDOC 翻译峰值 | ~258 MB |
+| 依赖 + 模型磁盘 | ~1.1 GB |
+| 单页翻译耗时 | 15-19 秒 |
+
+### 已应用的优化
+
+**1. BabelDOC 关闭自动术语提取（提速 72%）**
+
+实测同一篇论文：
+
+| 配置 | 耗时 |
+|---|---|
+| qps=4 + 术语提取 | 66.8s |
+| 关闭术语提取 | **18.9s** |
+
+术语提取会额外跑一轮 LLM 调用分析全文术语，对个人阅读收益有限。
+需要时可用环境变量 `PAPER_READER_BABEL_GLOSSARY=1` 开启。
+
+**2. 翻译并发自适应 CPU**
+
+`qps = min(8, max(2, cpu*2))`。2 核机器用 4，避免线程争抢反而变慢。
+
+**3. 串行翻译队列**
+
+导入论文自动入队，但**同时只跑 1 个任务**。4 篇并发导入时
+内存峰值仍是 ~258MB 而非 1GB+，避免 OOM。
+
+**4. SQLite 低配调优**
+
+- `synchronous=NORMAL`（WAL 下安全，大幅减少 fsync）
+- `temp_store=MEMORY`（临时表不进磁盘）
+- `busy_timeout=30000`（避免并发锁立即报错）
+
+**5. systemd 资源限制**
+
+```
+MemoryMax=1200M      # 硬上限，超了被杀而不是拖死系统
+MemoryHigh=900M      # 软上限，触发回收
+Nice=5               # 降低 CPU 抢占
+--limit-concurrency 64
+```
+
+**6. 自动创建 swap**
+
+内存 <3G 且无 swap 时，部署脚本尝试创建 2G swap（需 sudo）。
+
+**7. 模型预热**
+
+部署时预先下载 BabelDOC 的 430MB 模型，避免首次翻译卡 30-60 秒。
+
+### 首次部署注意
+
+```bash
+./deploy.sh
+```
+
+若模型下载失败（网络受限），可本地下载后上传：
+
+```bash
+# 本地（已跑过一次翻译的机器）
+tar -czf babeldoc-cache.tar.gz -C ~/.cache babeldoc
+
+# VPS
+tar -xzf babeldoc-cache.tar.gz -C ~/.cache
+```

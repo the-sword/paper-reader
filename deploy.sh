@@ -127,6 +127,17 @@ check_system_python() {
   ok "系统 Python 依赖就绪"
 }
 
+# 确定解释器（venv 优先，否则系统 python）
+resolve_py_bin() {
+  if [ "${USE_SYSTEM_PY:-0}" = "1" ]; then
+    PY_BIN="$(command -v python3)"
+  elif [ -x "$VENV/bin/python" ]; then
+    PY_BIN="$VENV/bin/python"
+  else
+    PY_BIN="$(command -v python3)"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # 1.5 无 npm 时自动安装项目内 Node（免 root，仅 Linux x64/arm64）
 # ---------------------------------------------------------------------------
@@ -236,6 +247,73 @@ build_frontend() {
 }
 
 # ---------------------------------------------------------------------------
+# 2.5 低配 VPS 保护：swap
+# ---------------------------------------------------------------------------
+setup_swap() {
+  local total_mb
+  total_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+  # 仅在小内存机器上处理（< 3G）
+  [ "$total_mb" -lt 3072 ] || return 0
+
+  if ! command -v swapon >/dev/null; then
+    warn "无 swapon，跳过 swap 配置"
+    return 0
+  fi
+  if [ "$(swapon --show 2>/dev/null | wc -l)" -gt 0 ]; then
+    ok "已有 swap: $(free -h | awk '/Swap/ {print $2}')"
+    return 0
+  fi
+
+  local swapfile="/swapfile"
+  warn "内存 ${total_mb}MB 偏小且无 swap，尝试创建 2G swap（需 sudo）"
+  if sudo -n fallocate -l 2G "$swapfile" 2>/dev/null \
+     && sudo -n chmod 600 "$swapfile" 2>/dev/null \
+     && sudo -n mkswap "$swapfile" >/dev/null 2>&1 \
+     && sudo -n swapon "$swapfile" 2>/dev/null; then
+    grep -q "^$swapfile" /etc/fstab 2>/dev/null || \
+      echo "$swapfile none swap sw 0 0" | sudo -n tee -a /etc/fstab >/dev/null 2>&1
+    ok "已创建 2G swap（防止 OOM）"
+  else
+    warn "创建 swap 失败（需要 sudo），建议手动执行:"
+    cat <<'EOM'
+    sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+    sudo mkswap /swapfile && sudo swapon /swapfile
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+EOM
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# 2.6 BabelDOC 资源预热
+# ---------------------------------------------------------------------------
+warmup_babeldoc() {
+  [ "$DO_BUILD" = "1" ] || return 0
+  local cache="$HOME/.cache/babeldoc"
+  if [ -d "$cache/models" ] && [ "$(du -sm "$cache" 2>/dev/null | cut -f1)" -gt 200 ]; then
+    ok "BabelDOC 模型缓存已就绪 ($(du -sh "$cache" | cut -f1))"
+    return 0
+  fi
+
+  info "预热 BabelDOC 模型（首次需下载约 430MB，可能较慢）"
+  local py="$PY_BIN"
+  [ -n "${py:-}" ] || py="python3"
+  if timeout 600 "$py" -c "
+import sys
+try:
+    from babeldoc.format.pdf.document_il.midend import layout_model_helper as m
+    m.LayoutModelHelper.get_instance() if hasattr(m,'LayoutModelHelper') else None
+    print('warmup ok')
+except Exception as e:
+    print('warmup skipped:', str(e)[:80])
+" 2>/dev/null | grep -q "warmup ok"; then
+    ok "模型预热完成 ($(du -sh "$cache" 2>/dev/null | cut -f1))"
+  else
+    warn "预热未完成，首次翻译时会自行下载（约 430MB）"
+    warn "若网络受限，可在本地下载后上传到 ~/.cache/babeldoc"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # 3. 数据目录 + 配置
 # ---------------------------------------------------------------------------
 setup_data() {
@@ -281,12 +359,7 @@ PY
 install_service() {
   mkdir -p "$LOG_DIR"
 
-  # 根据 venv / 系统 Python 选择解释器
-  if [ "${USE_SYSTEM_PY:-0}" = "1" ]; then
-    PY_BIN="$(command -v python3)"
-  else
-    PY_BIN="$VENV/bin/python"
-  fi
+  resolve_py_bin
 
   if [ "$HAVE_SYSTEMD_USER" = "1" ]; then
     info "安装 systemd user service"
@@ -300,11 +373,21 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$ROOT/backend
-ExecStart=$PY_BIN -m uvicorn app.main:app --host $HOST --port $PORT
+ExecStart=$PY_BIN -m uvicorn app.main:app --host $HOST --port $PORT --workers 1 --limit-concurrency 64
 Restart=on-failure
 RestartSec=3
 StandardOutput=append:$LOG_DIR/server.log
 StandardError=append:$LOG_DIR/server.log
+
+# --- 低配 VPS 保护 ---
+# 单进程（多 worker 会成倍吃内存，2C2G 上反而拖慢）
+MemoryMax=1200M
+# 内存紧张时优先回收页缓存而不是 OOM kill
+MemoryHigh=900M
+# 降低 CPU 抢占，避免翻译任务把系统卡死
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
 
 [Install]
 WantedBy=default.target
@@ -403,7 +486,10 @@ EOF
     fi
     setup_python
     check_system_python
+    resolve_py_bin
     build_frontend
+    setup_swap
+    warmup_babeldoc
     setup_data
     install_service
     wait_ready || true

@@ -128,6 +128,17 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+
+    # --- VPS 优化：低配机器磁盘 IO 是瓶颈 ---
+    # WAL 已启用（读写不互斥）。synchronous=NORMAL 在 WAL 下足够安全：
+    # 断电最多丢最后一个事务，但不会损坏库；相比 FULL 大幅减少 fsync。
+    conn.execute("PRAGMA synchronous=NORMAL")
+    # 负值 = KB，2MB 页缓存（2C2G 机器不宜给太大）
+    conn.execute("PRAGMA cache_size=-2000")
+    # 临时表放内存，减少磁盘写
+    conn.execute("PRAGMA temp_store=MEMORY")
+    # 锁等待 30s，避免并发下立即报 database is locked
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 
