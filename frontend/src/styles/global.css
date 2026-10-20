@@ -658,3 +658,79 @@ main::-webkit-scrollbar-track { background: transparent; }
   background: rgba(138, 180, 232, 0.16);
   border-bottom-color: #8ab4e8;
 }
+
+/* ============================================================
+   全局主题：把阅读器主题提升为整个应用的配色
+   ------------------------------------------------------------
+   原来只作用于 .reader-surface（阅读区），
+   现在通过 :root[data-reader-theme] 覆盖 --bg/--fg 等基础变量，
+   使侧栏、列表、顶栏、阅读区统一跟随所选主题。
+   ============================================================ */
+
+/* Crisp 锐利 */
+:root[data-reader-theme="crisp"] {
+  --bg: #ffffff;
+  --bg-side: #f8f9fb;
+  --bg-card: #ffffff;
+  --bg-active: #eef2ff;
+  --bg-canvas: #e8eaed;
+  --fg: #374151;
+  --fg-strong: #111827;
+  --fg-muted: #9ca3af;
+  --border: #e5e7eb;
+}
+
+/* Sepia 羊皮纸 */
+:root[data-reader-theme="sepia"] {
+  --bg: #f4ecd8;
+  --bg-side: #efe6d0;
+  --bg-card: #faf5e9;
+  --bg-active: #e8dcc0;
+  --bg-canvas: #e5d9bf;
+  --fg: #6b5844;
+  --fg-strong: #4a3a2c;
+  --fg-muted: #9c8b75;
+  --border: #e0d5bd;
+  --accent: #8a5a2b;
+}
+
+/* Soft 柔和 */
+:root[data-reader-theme="soft"] {
+  --bg: #f8f9fa;
+  --bg-side: #f1f3f5;
+  --bg-card: #ffffff;
+  --bg-active: #e7ecf2;
+  --bg-canvas: #e9ecef;
+  --fg: #374151;
+  --fg-strong: #1f2937;
+  --fg-muted: #9aa3ad;
+  --border: #e3e6e9;
+}
+
+/* Night 深夜 */
+:root[data-reader-theme="night"] {
+  --bg: #1a1a1b;
+  --bg-side: #202022;
+  --bg-card: #232326;
+  --bg-active: #2c2c34;
+  --bg-canvas: #141416;
+  --fg: #c9c9d1;
+  --fg-strong: #e8e8ee;
+  --fg-muted: #7b7b88;
+  --border: #303038;
+  --accent: #6366f1;
+}
+
+/* 主题下的画布区（PDF 页外的底色） */
+:root[data-reader-theme="sepia"] { --bg-canvas: #e5d9bf; }
+:root[data-reader-theme="soft"]  { --bg-canvas: #e9ecef; }
+
+/* 专注阅读模式：隐藏非核心 UI */
+.focus-mode .app-sidebar,
+.focus-mode aside,
+.focus-mode .resizer {
+  display: none !important;
+}
+.focus-mode .app-header-extra {
+  display: none !important;
+}

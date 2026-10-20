@@ -5,6 +5,7 @@ import PdfViewer from './components/PdfViewer'
 import SettingsDialog from './components/SettingsDialog'
 import ArxivPanel from './components/ArxivPanel'
 import QueueIndicator from './components/QueueIndicator'
+import ReaderSettings, { DEFAULT_READER_PREFS, type ReaderPrefs } from './components/ReaderSettings'
 import RightPanel from './components/RightPanel'
 import Resizer from './components/Resizer'
 import { useStore } from './stores/useStore'
@@ -49,6 +50,11 @@ export default function App() {
   const [showArxiv, setShowArxiv] = useState(false)
   /** 视图偏好是否已加载，避免用默认值覆盖用户选择 */
   const [viewPrefLoaded, setViewPrefLoaded] = useState(false)
+  /** 全局阅读主题与排版 */
+  const [readerPrefs, setReaderPrefs] = useState<ReaderPrefs>(DEFAULT_READER_PREFS)
+  /** 专注阅读模式：隐藏两侧栏，正文最大化 */
+  const [focusMode, setFocusMode] = useState(false)
+
   /** 双语 PDF（BabelDOC）任务状态 */
   const [bdJobId, setBdJobId] = useState<string | null>(null)
   const [bdRunning, setBdRunning] = useState(false)
@@ -93,6 +99,10 @@ export default function App() {
       if (values.view_mode === 'pdf' || values.view_mode === 'bilingual') {
         setView(values.view_mode)
       }
+      // 全局主题与排版
+      if (typeof values.reader_theme === 'string') {
+        setReaderPrefs((p) => ({ ...p, theme: values.reader_theme as ReaderPrefs['theme'] }))
+      }
       // 面板尺寸与显隐
       if (typeof values.panel_sidebar === 'number') setWSidebar(values.panel_sidebar)
       if (typeof values.panel_list === 'number') setWList(values.panel_list)
@@ -109,6 +119,22 @@ export default function App() {
     if (!currentDoc) return
     setBaseWidth(null)
   }, [currentDoc])
+
+  // 把主题应用到 <html>，使整个应用（含侧栏/顶栏）跟随
+  useEffect(() => {
+    const root = document.documentElement
+    if (readerPrefs.theme === 'auto') {
+      root.removeAttribute('data-reader-theme')
+    } else {
+      root.setAttribute('data-reader-theme', readerPrefs.theme)
+    }
+  }, [readerPrefs.theme])
+
+  // 进入/退出专注模式时可用宽度变化，重新适应
+  useEffect(() => {
+    setBaseWidth(null)
+    lastFitFor.current = null
+  }, [focusMode])
 
   /** 面板布局保存的防抖 timer */
   const panelSaveTimer = useRef<number | null>(null)
@@ -214,6 +240,9 @@ export default function App() {
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       if (e.metaKey || e.ctrlKey) return
 
+      if (e.key === 'Escape' && focusMode) {
+        setFocusMode(false); e.preventDefault(); return
+      }
       if (e.key === '+' || e.key === '=') { setScale((s) => clampScale(s + SCALE_STEP)); e.preventDefault() }
       else if (e.key === '-') { setScale((s) => clampScale(s - SCALE_STEP)); e.preventDefault() }
       else if (e.key === '0') { fitWidth(); e.preventDefault() }
@@ -221,7 +250,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [fitWidth, view])
+  }, [fitWidth, view, focusMode])
 
   useEffect(() => {
     void refreshSidebar()
@@ -238,7 +267,10 @@ export default function App() {
   const parsing = parseState === 'running' || parseState === 'pending' || parseState === 'queued'
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflow: 'hidden' }}>
+    <div
+      className={`app-root${focusMode ? ' focus-mode' : ''}`}
+      style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflow: 'hidden' }}
+    >
       {/* ---------- 顶栏 ---------- */}
       <header style={{
         height: 46, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8,
@@ -277,6 +309,17 @@ export default function App() {
         )}
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          {/* 专注阅读：一键收起两侧栏 */}
+          <button
+            className={`btn-ghost ${focusMode ? 'active' : ''}`}
+            style={{ padding: '4px 8px', fontSize: 13 }}
+            title={focusMode ? '退出专注模式 (Esc)' : '专注阅读：收起两侧栏'}
+            onClick={() => setFocusMode((v) => !v)}
+          >{focusMode ? '⤢' : '⛶'}</button>
+
+          {/* 全局主题与排版 */}
+          <ReaderSettings value={readerPrefs} onChange={setReaderPrefs} />
+
           {/* 解析按钮 */}
           {bdRunning && (
             <span style={{ fontSize: 11, color: 'var(--fg-muted)', whiteSpace: 'nowrap' }}>
