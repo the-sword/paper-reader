@@ -367,7 +367,8 @@ export const api = {
   babelDocStatus: (docId: string) =>
     req<{ generated: boolean; size?: number }>(`/reading/babeldoc/${docId}/status`),
   // 注意：直接返回给 window.open 的地址必须带 /api 前缀（req() 会自动拼，这里不会）
-  babelDocPdfUrl: (docId: string) => `/api/reading/babeldoc/${docId}/pdf${AUTH_TOKEN ? `?token=${AUTH_TOKEN}` : ''}`,
+  babelDocPdfUrl: (docId: string, variant: 'dual' | 'mono' = 'dual') =>
+    `/api/reading/babeldoc/${docId}/pdf?variant=${variant}${AUTH_TOKEN ? `&token=${AUTH_TOKEN}` : ''}`,
 
   // ---- 界面偏好 ----
   getPrefs: () => req<{ values: Record<string, unknown> }>('/reading/prefs'),

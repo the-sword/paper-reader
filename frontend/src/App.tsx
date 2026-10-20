@@ -60,6 +60,8 @@ export default function App() {
   const [vw, setVw] = useState(0)
   const [showList, setShowList] = useState(false)
   const [showNotesDrawer, setShowNotesDrawer] = useState(false)
+  /** PWA 独立窗口（standalone）：小屏下双语 PDF 只显示纯译文（mono），更清晰 */
+  const [isPwa, setIsPwa] = useState(false)
 
   /** 双语 PDF（BabelDOC）任务状态 */
   const [bdJobId, setBdJobId] = useState<string | null>(null)
@@ -90,6 +92,9 @@ export default function App() {
       const vw = window.innerWidth
       setIsMobile(vw < MOBILE)
       setVw(vw)
+      // PWA 独立窗口检测：Android/桌面用 display-mode，iOS 用 navigator.standalone
+      setIsPwa(window.matchMedia('(display-mode: standalone)').matches
+        || (window.navigator as Navigator & { standalone?: boolean }).standalone === true)
       setShowSidebar(vw >= NARROW)
       setShowNotes(vw >= VERY_NARROW)
       const usable = vw - (vw >= NARROW ? wSidebar : 0) - (vw >= VERY_NARROW ? wNotes : 0)
@@ -457,7 +462,7 @@ export default function App() {
           ) : view === 'bilingual' ? (
             bdReady[currentDoc.id] ? (
               <PdfViewer
-                url={api.babelDocPdfUrl(currentDoc.id)}
+                url={api.babelDocPdfUrl(currentDoc.id, isPwa ? 'mono' : 'dual')}
                 scale={scale}
                 onBaseWidth={setBaseWidth}
               />

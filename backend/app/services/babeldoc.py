@@ -319,8 +319,8 @@ async def translate_pdf_async(
         },
         pdf=PDFSettings(
             pages=pages,
-            no_dual=False,     # 需要双语版
-            no_mono=True,      # 单语版不需要
+            no_dual=False,     # 需要双语版（桌面端对照阅读）
+            no_mono=False,     # 同时产出纯译文版（PWA 小屏阅读更清晰）
             translate_table_text=True,
             only_include_translated_page=True,
         ),

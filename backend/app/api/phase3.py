@@ -388,15 +388,21 @@ def babeldoc_status(doc_id: str) -> dict[str, Any]:
 
 
 @router.get("/babeldoc/{doc_id}/pdf")
-def get_babeldoc_pdf(doc_id: str) -> Any:
-    """返回已生成的双语 PDF。"""
+def get_babeldoc_pdf(doc_id: str, variant: str = "dual") -> Any:
+    """返回已生成的双语 PDF。
+
+    variant=dual：原文+译文对照版；variant=mono：纯译文版
+    （PWA 等小屏场景页面为正常竖版，字号更大更清晰）。
+    mono 不存在时回落到 dual。
+    """
     r = babeldoc_svc.get_babeldoc_pdf(doc_id)
     if not r:
         raise HTTPException(404, "尚未生成双语 PDF")
+    path = r["mono"] if (variant == "mono" and r.get("mono")) else r["dual"]
     from fastapi.responses import FileResponse
 
-    return FileResponse(r["dual"], media_type="application/pdf",
-                        filename=f"{doc_id}-bilingual.pdf")
+    return FileResponse(path, media_type="application/pdf",
+                        filename=f"{doc_id}-bilingual-{variant if path != r['dual'] else 'dual'}.pdf")
 
 
 # ---------------------------------------------------------------------------

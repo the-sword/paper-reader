@@ -277,7 +277,10 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
 
     const host = hostRef.current
     let cancelled = false
-    const ratio = Math.min(window.devicePixelRatio || 1, 2)
+    // 渲染倍率：canvas 物理像素 = CSS 尺寸 × ratio。上限 3——手机 PWA 的
+    // devicePixelRatio 常为 3，压到 2 会导致文字发虚（缩放变化经由依赖
+    // [numPages, scale] 触发整页重渲，此处 ratio 每次重渲时重新取值）
+    const ratio = Math.min(window.devicePixelRatio || 1, 3)
     // pdf.js 文本层 span 用 calc(var(--scale-factor) * N px) 定位，
     // 必须在页面容器上声明该变量，否则定位整体漂移（框选错位）
     host.style.setProperty('--scale-factor', String(scale))
