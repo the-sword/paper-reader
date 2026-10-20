@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -196,9 +197,32 @@ def list_folders() -> list[dict[str, Any]]:
         return rows
 
 
+def _folder_name_taken(
+    conn: sqlite3.Connection,
+    name: str,
+    parent_id: str | None,
+    exclude_id: str | None = None,
+) -> bool:
+    """同一父级下是否已有同名文件夹（大小写不敏感）。
+
+    注意用 ``parent_id IS ?``，参数为 None 时正确匹配根级文件夹。
+    """
+    sql = "SELECT 1 FROM folders WHERE name=? COLLATE NOCASE AND parent_id IS ?"
+    params: list[Any] = [name, parent_id]
+    if exclude_id:
+        sql += " AND id<>?"
+        params.append(exclude_id)
+    return conn.execute(sql, params).fetchone() is not None
+
+
 def create_folder(name: str, parent_id: str | None = None) -> dict[str, Any]:
+    name = name.strip()
+    if not name:
+        raise ValueError("文件夹名不能为空")
     fid = str(uuid.uuid4())
     with db() as conn:
+        if _folder_name_taken(conn, name, parent_id):
+            raise ValueError(f"已存在同名文件夹「{name}」")
         conn.execute(
             "INSERT INTO folders (id, name, parent_id, created_at) VALUES (?,?,?,?)",
             (fid, name, parent_id, _now()),
@@ -207,7 +231,17 @@ def create_folder(name: str, parent_id: str | None = None) -> dict[str, Any]:
 
 
 def rename_folder(folder_id: str, name: str) -> None:
+    name = name.strip()
+    if not name:
+        raise ValueError("文件夹名不能为空")
     with db() as conn:
+        row = conn.execute(
+            "SELECT parent_id FROM folders WHERE id=?", (folder_id,)
+        ).fetchone()
+        if not row:
+            raise LookupError("文件夹不存在")
+        if _folder_name_taken(conn, name, row["parent_id"], exclude_id=folder_id):
+            raise ValueError(f"已存在同名文件夹「{name}」")
         conn.execute("UPDATE folders SET name=? WHERE id=?", (name, folder_id))
 
 

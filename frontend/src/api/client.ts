@@ -217,6 +217,8 @@ export const api = {
   listFolders: () => req<Folder[]>('/folders'),
   createFolder: (name: string, parentId?: string) =>
     req<Folder>('/folders', { method: 'POST', body: JSON.stringify({ name, parent_id: parentId ?? null }) }),
+  renameFolder: (id: string, name: string) =>
+    req<{ ok: boolean }>(`/folders/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
   deleteFolder: (id: string) => req<{ ok: boolean }>(`/folders/${id}`, { method: 'DELETE' }),
 
   listTags: () => req<Tag[]>('/tags'),

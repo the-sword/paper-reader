@@ -1,7 +1,7 @@
 """文件夹 API。"""
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..services import library
@@ -21,12 +21,20 @@ def list_folders() -> list[dict]:
 
 @router.post("")
 def create_folder(body: FolderIn) -> dict:
-    return library.create_folder(body.name, body.parent_id)
+    try:
+        return library.create_folder(body.name, body.parent_id)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
 
 
 @router.patch("/{folder_id}")
 def rename_folder(folder_id: str, body: FolderIn) -> dict:
-    library.rename_folder(folder_id, body.name)
+    try:
+        library.rename_folder(folder_id, body.name)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
     return {"ok": True}
 
 
