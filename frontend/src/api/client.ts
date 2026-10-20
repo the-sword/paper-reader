@@ -334,7 +334,8 @@ export const api = {
     req<{ ok: boolean }>(`/reading/babeldoc/job/${jobId}/cancel`, { method: 'POST' }),
   babelDocStatus: (docId: string) =>
     req<{ generated: boolean; size?: number }>(`/reading/babeldoc/${docId}/status`),
-  babelDocPdfUrl: (docId: string) => `/reading/babeldoc/${docId}/pdf`,
+  // 注意：直接返回给 window.open 的地址必须带 /api 前缀（req() 会自动拼，这里不会）
+  babelDocPdfUrl: (docId: string) => `/api/reading/babeldoc/${docId}/pdf${AUTH_TOKEN ? `?token=${AUTH_TOKEN}` : ''}`,
 
   // ---- 界面偏好 ----
   getPrefs: () => req<{ values: Record<string, unknown> }>('/reading/prefs'),
