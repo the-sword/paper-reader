@@ -195,6 +195,37 @@ input:focus, textarea:focus { border-color: var(--accent); }
   cursor: default;
 }
 
+/* 文本层内 span/br 需要置顶，避免被后续绝对定位兄弟元素覆盖影响选区命中 */
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+}
+
+.textLayer .markedContent {
+  top: 0;
+  height: 0;
+}
+
+.textLayer br::selection {
+  background: transparent;
+}
+
+/* 官方 viewer 选区哨兵：平时悬在页面底部下方不可选；框选（.selecting）时
+   覆盖整页，防止浏览器把选区锚点跳回页首导致高亮"跳动错位" */
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+  -moz-user-select: none;
+}
+
+.textLayer.selecting .endOfContent {
+  top: 0;
+}
+
 /* 选中文字时给一点可见反馈 */
 .textLayer ::selection {
   background: rgba(79, 70, 229, 0.28);

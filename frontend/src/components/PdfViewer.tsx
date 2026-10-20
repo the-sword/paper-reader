@@ -105,6 +105,9 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
     const run = async () => {
       host.innerHTML = ''
       const ratio = Math.min(window.devicePixelRatio || 1, 2)
+      // pdf.js 文本层 span 用 calc(var(--scale-factor) * N px) 定位，
+      // 必须在每个页面容器上声明该变量，否则定位整体漂移（框选错位）
+      host.style.setProperty('--scale-factor', String(scale))
 
       for (let i = 1; i <= numPages; i++) {
         if (cancelled) return
@@ -155,6 +158,12 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
           viewport: vp,
         })
         await textLayer.render()
+
+        // 官方 viewer 的选区哨兵：位于页面底部下方的不可选元素。
+        // 框选下移越过页面底边时先命中它，浏览器就不会把选区锚点跳回页首
+        const eoc = document.createElement('div')
+        eoc.className = 'endOfContent'
+        textLayerEl.appendChild(eoc)
       }
     }
 
@@ -194,6 +203,12 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
   }, [annotations, numPages, scale, removeAnnotation])
 
   // ---- 文本选区 → 气泡 ----
+  /** 选区结束/取消后移除所有文本层的 .selecting，恢复 endOfContent 哨兵位置 */
+  const clearSelecting = (root: HTMLElement | null) => {
+    if (!root) return
+    root.querySelectorAll<HTMLElement>('.textLayer.selecting').forEach((l) => l.classList.remove('selecting'))
+  }
+
   const onMouseUp = useCallback(() => {
     const sel = window.getSelection()
     if (!sel || sel.isCollapsed) { setBubble(null); return }
@@ -275,7 +290,18 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
   }
 
   return (
-    <div className="viewer-wrap" ref={wrapRef} onMouseUp={onMouseUp}>
+    <div
+      className="viewer-wrap"
+      ref={wrapRef}
+      onMouseUp={(e) => { clearSelecting(e.currentTarget); onMouseUp() }}
+      onMouseDown={(e) => {
+        // 框选期间给文本层加 .selecting（官方 viewer 同款）：
+        // 让 endOfContent 哨兵覆盖整页，向下框选时选区不跳回页首
+        e.currentTarget.querySelectorAll<HTMLElement>('.textLayer.selecting').forEach((l) => l.classList.remove('selecting'))
+        const layer = (e.target as HTMLElement).closest('.textLayer')
+        layer?.classList.add('selecting')
+      }}
+    >
       {loading && <div className="viewer-hint">正在加载 PDF…</div>}
       <div className="canvas-host" ref={hostRef} />
       {bubble && (
