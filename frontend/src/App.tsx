@@ -147,7 +147,8 @@ export default function App() {
             setBdRunning(false); setBdJobId(null)
             if (st.status === 'done') {
               setBdReady((m) => ({ ...m, [currentDoc.id]: true }))
-              // 完成后直接在页面内切换到双语 PDF 视图
+              // 完成后直接在页面内切换到双语 PDF 视图（并重新适应宽度）
+              setBaseWidth(null)
               setView('bilingual')
             } else {
               setError(`双语 PDF 生成失败：${st.error ?? '未知原因'}`)
@@ -196,19 +197,25 @@ export default function App() {
   }
   /** 切换视图并记住选择 */
   const switchView = (v: ViewMode) => {
+    // 重置尺寸基准，让新视图重新测量并适应宽度
+    if (v !== view) setBaseWidth(null)
     setView(v)
     if (viewPrefLoaded) {
       void api.savePrefs({ view_mode: v }).catch(() => {})
     }
   }
 
+  // 适应宽度的去重 key 必须包含视图：
+  // 同一篇论文在「PDF / 双语PDF」间切换时，两者的页面尺寸不同，
+  // 若只按文档 id 去重会跳过适应，导致打开时不自适应。
   const lastFitFor = useRef<string | null>(null)
   useEffect(() => {
     if (!currentDoc || !baseWidth) return
-    if (lastFitFor.current === currentDoc.id) return
-    lastFitFor.current = currentDoc.id
+    const key = `${currentDoc.id}:${view}`
+    if (lastFitFor.current === key) return
+    lastFitFor.current = key
     fitWidth()
-  }, [currentDoc, baseWidth, fitWidth])
+  }, [currentDoc, baseWidth, fitWidth, view])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
