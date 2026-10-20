@@ -15,7 +15,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { TextLayer } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { useStore } from '../stores/useStore'
-import type { Annotation } from '../api/client'
+import { api, type Annotation } from '../api/client'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
@@ -34,6 +34,12 @@ interface Bubble {
   page: number
   rects: number[][]
   quote: string
+  /** 划词翻译结果（点「翻译」后填充） */
+  translated?: string
+  engine?: string
+  latency?: number
+  translating?: boolean
+  transError?: string
 }
 
 export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
@@ -238,6 +244,29 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
     })
   }, [])
 
+  /** 划词翻译（手动触发） */
+  const translateSelection = async () => {
+    const b = bubble
+    if (!b || b.translated || b.translating) return
+    setBubble({ ...b, translating: true, transError: undefined })
+    try {
+      const engine = useStore.getState().selectedEngine
+      const r = await api.translateTerm(b.quote, engine)
+      setBubble((cur) =>
+        cur && cur.quote === b.quote
+          ? { ...cur, translated: r.text, engine: r.engine,
+              latency: r.latency_ms, translating: false }
+          : cur,
+      )
+    } catch (e) {
+      setBubble((cur) =>
+        cur && cur.quote === b.quote
+          ? { ...cur, translating: false, transError: String(e).replace(/^Error:\s*/, '') }
+          : cur,
+      )
+    }
+  }
+
   const confirmHighlight = async () => {
     if (!bubble || !currentDoc) return
     await addAnnotation(currentDoc.id, bubble.page, bubble.rects, bubble.quote, color)
@@ -254,7 +283,32 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
           <div className="sel-quote">
             “{bubble.quote.slice(0, 60)}{bubble.quote.length > 60 ? '…' : ''}”
           </div>
+          {/* 划词翻译结果 */}
+          {bubble.translating && (
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 6 }}>翻译中…</div>
+          )}
+          {bubble.translated && (
+            <div style={{ marginBottom: 6 }}>
+              <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--fg-strong)' }}>
+                {bubble.translated}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--fg-muted)', marginTop: 3 }}>
+                {bubble.engine}
+                {bubble.latency ? ` · ${bubble.latency}ms` : ''}
+              </div>
+            </div>
+          )}
+          {bubble.transError && (
+            <div style={{ fontSize: 11, color: '#b91c1c', marginBottom: 6 }}>
+              {bubble.transError}
+            </div>
+          )}
+
           <div className="sel-actions">
+            {!bubble.translated && !bubble.translating && (
+              <button className="btn-primary" style={{ fontSize: 11, padding: '3px 10px' }}
+                onClick={() => void translateSelection()}>翻译</button>
+            )}
             {COLORS.map((c) => (
               <button
                 key={c}
@@ -264,7 +318,7 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
                 aria-label={`颜色 ${c}`}
               />
             ))}
-            <button className="btn-primary" onClick={confirmHighlight}>高亮</button>
+            <button className="btn-ghost" onClick={confirmHighlight}>高亮</button>
             <button className="btn-ghost" onClick={() => setBubble(null)}>取消</button>
           </div>
         </div>

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar'
 import DocumentList from './components/DocumentList'
 import PdfViewer from './components/PdfViewer'
-import ReadingView from './components/ReadingView'
 import SettingsDialog from './components/SettingsDialog'
 import ArxivPanel from './components/ArxivPanel'
 import RightPanel from './components/RightPanel'
@@ -89,7 +88,8 @@ export default function App() {
   // 启动时加载上次使用的视图
   useEffect(() => {
     void api.getPrefs().then(({ values }) => {
-      if (values.view_mode === 'reading' || values.view_mode === 'pdf') {
+      // 'reading' 视图已停用，历史偏好回落为 pdf
+      if (values.view_mode === 'pdf' || values.view_mode === 'bilingual') {
         setView(values.view_mode)
       }
       // 面板尺寸与显隐
@@ -108,16 +108,6 @@ export default function App() {
     if (!currentDoc) return
     setBaseWidth(null)
   }, [currentDoc])
-
-  // 若当前是「双语阅读」但该文献还没解析，自动回退到 PDF
-  // （只在确实没有段落时回退，解析完成后仍停留在当前视图）
-  useEffect(() => {
-    if (!viewPrefLoaded || !currentDoc) return
-    if (view === 'reading' && parseState !== 'idle' && segments.length === 0
-        && parseState !== 'running' && parseState !== 'pending') {
-      setView('pdf')
-    }
-  }, [view, viewPrefLoaded, currentDoc, segments.length, parseState])
 
   /** 面板布局保存的防抖 timer */
   const panelSaveTimer = useRef<number | null>(null)
@@ -222,7 +212,7 @@ export default function App() {
       const t = e.target as HTMLElement
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       if (e.metaKey || e.ctrlKey) return
-      if (view === 'reading') return
+
       if (e.key === '+' || e.key === '=') { setScale((s) => clampScale(s + SCALE_STEP)); e.preventDefault() }
       else if (e.key === '-') { setScale((s) => clampScale(s - SCALE_STEP)); e.preventDefault() }
       else if (e.key === '0') { fitWidth(); e.preventDefault() }
@@ -268,11 +258,6 @@ export default function App() {
               className={`seg ${view === 'pdf' ? 'active' : ''}`}
               onClick={() => switchView('pdf')}
             >PDF</button>
-            <button
-              className={`seg ${view === 'reading' ? 'active' : ''}`}
-              onClick={() => switchView('reading')}
-              title={hasSegments ? '段落流双语阅读' : '先解析全文'}
-            >双语阅读</button>
             <button
               className={`seg ${view === 'bilingual' ? 'active' : ''}`}
               title={bdReady[currentDoc.id]
@@ -361,14 +346,12 @@ export default function App() {
 
         <main
           ref={mainRef}
-          style={{ flex: '1 1 0', minWidth: 0, overflow: view === 'reading' ? 'hidden' : 'auto', background: view === 'reading' ? 'var(--bg)' : 'var(--bg-canvas)' }}
+          style={{ flex: '1 1 0', minWidth: 0, overflow: 'auto', background: 'var(--bg-canvas)' }}
         >
           {!currentDoc ? (
             <div className="hint" style={{ padding: 40, textAlign: 'center' }}>
               {loading ? '加载中…' : '从左侧选择或导入一篇 PDF'}
             </div>
-          ) : view === 'reading' ? (
-            <ReadingView />
           ) : view === 'bilingual' ? (
             bdReady[currentDoc.id] ? (
               <PdfViewer
