@@ -36,6 +36,7 @@ export default function App() {
   const refreshSidebar = useStore((s) => s.refreshSidebar)
   const refreshLibrary = useStore((s) => s.refreshLibrary)
   const startParse = useStore((s) => s.startParse)
+  const setError = (msg: string) => useStore.setState({ error: msg })
 
   const [scale, setScale] = useState(1.0)
   const [wSidebar, setWSidebar] = useState(W_SIDEBAR)
@@ -48,6 +49,13 @@ export default function App() {
   const [showArxiv, setShowArxiv] = useState(false)
   /** 视图偏好是否已加载，避免用默认值覆盖用户选择 */
   const [viewPrefLoaded, setViewPrefLoaded] = useState(false)
+  /** 双语 PDF（BabelDOC）任务状态 */
+  const [bdJobId, setBdJobId] = useState<string | null>(null)
+  const [bdRunning, setBdRunning] = useState(false)
+  const [bdProgress, setBdProgress] = useState(0)
+  const [bdMessage, setBdMessage] = useState('')
+  const [bdReady, setBdReady] = useState<Record<string, boolean>>({})
+  const bdPollRef = useRef<number | null>(null)
   const [view, setView] = useState<ViewMode>('pdf')
 
   const mainRef = useRef<HTMLElement>(null)
@@ -113,6 +121,54 @@ export default function App() {
 
   /** 面板布局保存的防抖 timer */
   const panelSaveTimer = useRef<number | null>(null)
+
+  /** 启动双语 PDF 任务并轮询进度 */
+  const startBilingualPdf = async () => {
+    if (!currentDoc || bdRunning) return
+    setBdRunning(true); setBdProgress(5); setBdMessage('启动任务'); setError('')
+    try {
+      const { job_id } = await api.startBabelDoc(currentDoc.id)
+      setBdJobId(job_id)
+      bdPollRef.current = window.setInterval(async () => {
+        try {
+          const st = await api.babelDocJob(job_id)
+          setBdProgress(st.progress); setBdMessage(st.message)
+          if (st.status !== 'running') {
+            stopBdPoll()
+            setBdRunning(false); setBdJobId(null)
+            if (st.status === 'done') {
+              setBdReady((m) => ({ ...m, [currentDoc.id]: true }))
+              // 完成后直接在新标签页打开双语 PDF
+              window.open(api.babelDocPdfUrl(currentDoc.id), '_blank')
+            } else {
+              setError(`双语 PDF 生成失败：${st.error ?? '未知原因'}`)
+            }
+          }
+        } catch (e) {
+          stopBdPoll(); setBdRunning(false); setBdJobId(null)
+          setError(`双语 PDF：${String(e).replace(/^Error:\s*/, '')}`)
+        }
+      }, 1500)
+    } catch (e) {
+      setBdRunning(false); setBdJobId(null)
+      setError(String(e).replace(/^Error:\s*/, ''))
+    }
+  }
+
+  const stopBdPoll = () => {
+    if (bdPollRef.current !== null) {
+      window.clearInterval(bdPollRef.current)
+      bdPollRef.current = null
+    }
+  }
+
+  const cancelBd = async () => {
+    if (!bdJobId) return
+    setBdMessage('正在取消…')
+    try { await api.cancelBabelDoc(bdJobId) } catch { /* 忽略 */ }
+  }
+
+  useEffect(() => () => stopBdPoll(), [])
 
   /** 保存面板布局到偏好（防抖，避免拖动时频繁请求） */
   const savePanelPrefs = (patch: { sidebar?: number; list?: number; notes?: number; showSidebar?: boolean; showNotes?: boolean }) => {
@@ -201,11 +257,33 @@ export default function App() {
               onClick={() => switchView('reading')}
               title={hasSegments ? '段落流双语阅读' : '先解析全文'}
             >双语阅读</button>
+            <button
+              className="seg"
+              title={bdReady[currentDoc.id] ? '打开双语 PDF' : '生成保留原排版的双语 PDF'}
+              onClick={() => {
+                if (bdReady[currentDoc.id]) {
+                  window.open(api.babelDocPdfUrl(currentDoc.id), '_blank')
+                } else {
+                  void startBilingualPdf()
+                }
+              }}
+              disabled={bdRunning}
+            >{bdRunning ? '生成中' : (bdReady[currentDoc.id] ? '打开双语PDF' : '双语PDF')}</button>
           </div>
         )}
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           {/* 解析按钮 */}
+          {bdRunning && (
+            <span style={{ fontSize: 11, color: 'var(--fg-muted)', whiteSpace: 'nowrap' }}>
+              {bdMessage} {Math.round(bdProgress)}%
+              <button
+                className="btn-ghost" style={{ fontSize: 10, padding: '0 4px', marginLeft: 4 }}
+                onClick={() => void cancelBd()}
+              >取消</button>
+            </span>
+          )}
+
           {currentDoc && !hasSegments && !parsing && (
             <button className="btn-primary" style={{ fontSize: 12 }} onClick={() => void startParse('auto')}>
               解析全文

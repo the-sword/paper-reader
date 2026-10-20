@@ -127,6 +127,15 @@ export interface Reference {
   year: number | null
   venue: string
 }
+export interface BabelDocJob {
+  id: string
+  kind: string
+  status: 'running' | 'done' | 'failed' | 'cancelled'
+  progress: number
+  message: string
+  result: null | { dual_pdf: string; mono_pdf: string | null; output_dir: string }
+  error: string | null
+}
 export interface TermResult {
   source: string
   text: string
@@ -313,6 +322,17 @@ export const api = {
     req<{ ok: boolean; mode: string; cleared: number; translated: number; failed?: number }>(
       `/reading/${docId}/retranslate`,
       { method: 'POST', body: JSON.stringify({ mode, engine: engine || null, limit: limit ?? null }) }),
+
+  // ---- 双语 PDF（BabelDOC）----
+  startBabelDoc: (docId: string, pages?: string) =>
+    req<{ job_id: string; status: string }>(
+      `/reading/babeldoc/${docId}/start`,
+      { method: 'POST', body: JSON.stringify({ pages: pages || null }) }),
+  babelDocJob: (jobId: string) =>
+    req<BabelDocJob>(`/reading/babeldoc/job/${jobId}`),
+  cancelBabelDoc: (jobId: string) =>
+    req<{ ok: boolean }>(`/reading/babeldoc/job/${jobId}/cancel`, { method: 'POST' }),
+  babelDocPdfUrl: (docId: string) => `/reading/babeldoc/${docId}/pdf`,
 
   // ---- 界面偏好 ----
   getPrefs: () => req<{ values: Record<string, unknown> }>('/reading/prefs'),
