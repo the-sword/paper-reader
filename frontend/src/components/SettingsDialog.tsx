@@ -614,6 +614,108 @@ function SystemTab() {
           {row('鉴权', info.auth_enabled ? '已启用' : '未启用（仅本地开发）')}
         </>
       ) : <div style={{ fontSize: 12 }}>加载中…</div>}
+
+      <PerfCheck />
+    </div>
+  )
+}
+
+/** 性能自检：评估当前机器能否跑得动各功能。 */
+function PerfCheck() {
+  const [res, setRes] = useState<import('../api/client').SelfCheckResult | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const run = async () => {
+    setBusy(true); setErr('')
+    try {
+      setRes(await api.selfcheck(false))
+    } catch (e) {
+      setErr(String(e).replace(/^Error:\s*/, ''))
+    } finally { setBusy(false) }
+  }
+
+  const levelColor = (l: string) =>
+    l === 'excellent' ? '#16a34a' : l === 'good' ? '#65a30d'
+    : l === 'fair' ? '#d97706' : l === 'slow' ? '#dc2626' : 'var(--fg-muted)'
+
+  return (
+    <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+        <strong style={{ fontSize: 12 }}>性能自检</strong>
+        <button
+          className="btn-primary"
+          style={{ marginLeft: 'auto', fontSize: 11, padding: '3px 12px' }}
+          onClick={() => void run()} disabled={busy}
+        >{busy ? '检测中…' : res ? '重新检测' : '开始检测'}</button>
+      </div>
+
+      {!res && !busy && (
+        <div style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.7 }}>
+          检测 CPU / 内存 / 磁盘 / ONNX 推理性能，给出各功能的可用性结论。
+          部署到 VPS 后跑一次就知道够不够用。约需 5-15 秒。
+        </div>
+      )}
+      {err && <div style={{ fontSize: 11, color: '#b91c1c' }}>{err}</div>}
+
+      {res && (
+        <>
+          <div style={{
+            padding: '8px 10px', borderRadius: 6, marginBottom: 10,
+            background: 'var(--bg-side)', fontSize: 12, lineHeight: 1.6,
+          }}>{res.verdict}</div>
+
+          <div style={{ fontSize: 11, lineHeight: 1.9 }}>
+            <div>
+              CPU：
+              <b>{res.cpu.cores} 核</b>
+              <span style={{ color: levelColor(res.cpu.level), marginLeft: 6 }}>
+                {res.cpu.desc}
+              </span>
+            </div>
+            <div>
+              内存：
+              <b>{res.memory.total_mb} MB</b>
+              {res.memory.swap_mb > 0 && ` / swap ${res.memory.swap_mb} MB`}
+              {res.memory.swap_mb === 0 && res.memory.total_mb < 3072 && (
+                <span style={{ color: '#d97706', marginLeft: 6 }}>建议加 swap</span>
+              )}
+            </div>
+            {res.disk.write_mb_s !== undefined && (
+              <div>
+                磁盘写入：
+                <b style={{ color: levelColor(res.disk.level) }}>{res.disk.write_mb_s} MB/s</b>
+              </div>
+            )}
+            {res.onnx.available ? (
+              <div>
+                ONNX 推理：
+                <b>{res.onnx.infer_ms} ms</b>
+                <span style={{ color: 'var(--fg-muted)', marginLeft: 6 }}>
+                  (加载 {res.onnx.load_s}s, {res.onnx.providers?.join('/')})
+                </span>
+              </div>
+            ) : res.onnx.reason ? (
+              <div style={{ color: 'var(--fg-muted)' }}>ONNX：{res.onnx.reason}</div>
+            ) : null}
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            {res.features.map((f) => (
+              <div key={f.name} style={{
+                display: 'flex', gap: 6, fontSize: 11,
+                padding: '4px 0', alignItems: 'flex-start',
+              }}>
+                <span style={{ color: f.ok ? '#16a34a' : '#dc2626', flexShrink: 0 }}>
+                  {f.ok ? '✓' : '✗'}
+                </span>
+                <span style={{ flexShrink: 0, width: 130 }}>{f.name}</span>
+                <span style={{ color: 'var(--fg-muted)', flex: 1 }}>{f.note}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }

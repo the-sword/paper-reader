@@ -127,6 +127,15 @@ export interface Reference {
   year: number | null
   venue: string
 }
+export interface SelfCheckResult {
+  cpu: { cores: number; baseline_s: number; level: string; desc: string }
+  memory: { total_mb: number; available_mb: number; swap_mb: number; level: string; has_swap: boolean }
+  disk: { write_mb_s?: number; level: string }
+  sqlite: { insert_200_ms?: number }
+  onnx: { available?: boolean; load_s?: number; infer_ms?: number; providers?: string[]; reason?: string }
+  features: Array<{ name: string; ok: boolean; note: string }>
+  verdict: string
+}
 export interface QueueItem {
   doc_id: string
   title: string
@@ -345,6 +354,8 @@ export const api = {
     req<BabelDocJob>(`/reading/babeldoc/job/${jobId}`),
   cancelBabelDoc: (jobId: string) =>
     req<{ ok: boolean }>(`/reading/babeldoc/job/${jobId}/cancel`, { method: 'POST' }),
+  selfcheck: (quick = false) =>
+    req<SelfCheckResult>(`/system/selfcheck?quick=${quick}`),
   babelDocQueue: () => req<QueueSnapshot>('/reading/babeldoc/queue'),
   setQueueEnabled: (enabled: boolean) =>
     req<{ ok: boolean; enabled: boolean }>('/reading/babeldoc/queue/toggle',
