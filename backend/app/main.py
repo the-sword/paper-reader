@@ -84,9 +84,29 @@ def get_parsed_asset(doc_id: str, subpath: str):
 
 
 # ---- 前端静态资源（构建产物存在时托管）----
+class _CachedStaticFiles(StaticFiles):
+    """静态资源缓存头。
+
+    - /assets/* 文件名带内容 hash：immutable 长缓存，二次访问零请求
+    - manifest.json / icons：短缓存
+    - sw.js / index.html 及其余：no-cache，SW 更新与发新版都依赖即时生效
+    """
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if resp.status_code == 200:
+            if path.startswith("assets/"):
+                resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            elif path == "manifest.json" or path.startswith("icons/"):
+                resp.headers["Cache-Control"] = "public, max-age=3600"
+            else:
+                resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 _DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if _DIST.exists():
-    app.mount("/", StaticFiles(directory=_DIST, html=True), name="web")
+    app.mount("/", _CachedStaticFiles(directory=_DIST, html=True), name="web")
 else:
     @app.get("/")
     def _no_dist() -> dict:
