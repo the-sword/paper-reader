@@ -1,0 +1,21 @@
+# 可选依赖：双语 PDF（BabelDOC）
+#
+# 仅当需要「保留原版式的双语 PDF」功能时才安装：
+#     pip install -r requirements-babeldoc.txt
+#
+# 为什么单独拆开：
+#   pdf2zh-next 会连带安装 gradio（约 500MB，我们完全用不到）、
+#   onnxruntime 版面模型、中文字体等，合计约 1.1GB。
+#   只用基础阅读/翻译功能的用户没必要付出这个代价。
+#
+# 版本约束说明：
+#   - pdf2zh-next 要求 pymupdf<1.25.3，与基础依赖 pymupdf>=1.24 有交集，
+#     但必须锁上限，否则 pip 会解析到不兼容版本。
+#   - Python 需 3.10 ~ 3.13。
+pdf2zh-next>=2.9.0,<3.0.0
+
+# 锁 PyMuPDF 上限，满足 pdf2zh-next 的约束
+pymupdf>=1.24,<1.25.3
+
+# ONNX 推理（CPU 模式即可，无需 GPU）
+onnxruntime>=1.17

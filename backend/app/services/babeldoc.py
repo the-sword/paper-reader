@@ -20,6 +20,23 @@ from ..core.db import db
 from . import translate as ai_mod
 
 
+def is_available() -> tuple[bool, str]:
+    """检查 BabelDOC 是否已安装。返回 (可用, 原因)。
+
+    双语 PDF 属于可选功能，依赖体积约 1.1GB，默认不随基础部署安装。
+    """
+    try:
+        import pdf2zh_next  # noqa: F401
+
+        return True, ""
+    except ImportError:
+        return False, (
+            "未安装双语 PDF 依赖。"
+            "在 VPS 上执行：cd backend && "
+            "pip install -r requirements-babeldoc.txt"
+        )
+
+
 def get_ai_config_for_babeldoc() -> dict[str, Any]:
     """从全局 AI 配置构造 pdf2zh 的引擎参数。"""
     cfg = ai_mod.get_ai_config()
@@ -62,6 +79,10 @@ async def translate_pdf_async(
     import asyncio as _asyncio
     import os as _os
     from pathlib import Path as _Path
+
+    ok, reason = is_available()
+    if not ok:
+        raise RuntimeError(reason)
 
     from pdf2zh_next import high_level
 

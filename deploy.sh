@@ -108,6 +108,8 @@ setup_python() {
   "$VENV/bin/python" -m pip install -q -r "$ROOT/backend/requirements.txt" \
     || die "依赖安装失败"
   ok "Python 依赖就绪 ($(du -sh "$VENV" | cut -f1))"
+
+  install_babeldoc_deps "$VENV/bin/python"
 }
 
 # 系统 Python 模式下确认依赖可用
@@ -124,7 +126,33 @@ check_system_python() {
       || pip3 install -q --break-system-packages -r "$ROOT/backend/requirements.txt" \
       || die "依赖安装失败，请手动执行: pip3 install -r backend/requirements.txt"
   fi
+  install_babeldoc_deps python3
   ok "系统 Python 依赖就绪"
+}
+
+# 安装双语 PDF 的可选依赖（BabelDOC）
+# 体积约 1.1GB（含 gradio/onnxruntime），失败不阻断部署
+install_babeldoc_deps() {
+  local py="$1"
+  if "$py" -c "import pdf2zh_next" 2>/dev/null; then
+    ok "双语 PDF 依赖已就绪"
+    return 0
+  fi
+
+  info "安装双语 PDF 依赖（BabelDOC，约 1.1GB，请耐心等待）"
+  local extra=()
+  # 系统 Python 下可能受 PEP 668 保护
+  case "$py" in
+    *venv*) ;;
+    *) extra=(--break-system-packages) ;;
+  esac
+
+  if "$py" -m pip install -q "${extra[@]}" -r "$ROOT/backend/requirements-babeldoc.txt" 2>/dev/null; then
+    ok "双语 PDF 依赖安装完成"
+  else
+    warn "双语 PDF 依赖安装失败，其余功能不受影响"
+    warn "可稍后手动执行: $py -m pip install -r backend/requirements-babeldoc.txt"
+  fi
 }
 
 # 确定解释器（venv 优先，否则系统 python）

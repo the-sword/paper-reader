@@ -234,6 +234,11 @@ class BabelDocReq(BaseModel):
 @router.post("/babeldoc/{doc_id}/start")
 def start_babeldoc(doc_id: str, body: BabelDocReq) -> dict[str, Any]:
     """启动 BabelDOC 双语 PDF 翻译任务。立即返回 job_id，可轮询/取消。"""
+    # 依赖未安装时立即返回，避免用户等半天才看到错误
+    ok, reason = babeldoc_svc.is_available()
+    if not ok:
+        raise HTTPException(503, reason)
+
     if not library.get_document(doc_id):
         raise HTTPException(404, "文献不存在")
     pdf = library.pdf_path_of(doc_id)
@@ -324,16 +329,20 @@ def cancel_babeldoc(job_id: str) -> dict[str, Any]:
 @router.get("/babeldoc/{doc_id}/status")
 def babeldoc_status(doc_id: str) -> dict[str, Any]:
     """查询该文档是否已生成双语 PDF（供前端决定按钮显示）。"""
+    ok, reason = babeldoc_svc.is_available()
+    if not ok:
+        return {"generated": False, "available": False, "reason": reason}
+
     r = babeldoc_svc.get_babeldoc_pdf(doc_id)
     if not r:
-        return {"generated": False}
+        return {"generated": False, "available": True}
     import os
 
     try:
         size = os.path.getsize(r["dual"])
     except OSError:
         size = 0
-    return {"generated": True, "size": size}
+    return {"generated": True, "available": True, "size": size}
 
 
 @router.get("/babeldoc/{doc_id}/pdf")
