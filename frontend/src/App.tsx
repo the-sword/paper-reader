@@ -17,6 +17,7 @@ const W_NOTES = 300
 
 const NARROW = 1360
 const VERY_NARROW = 1120
+const MOBILE = 768
 const MIN_READER_W = 620
 
 const SCALE_MIN = 0.4
@@ -54,6 +55,11 @@ export default function App() {
   const [readerPrefs, setReaderPrefs] = useState<ReaderPrefs>(DEFAULT_READER_PREFS)
   /** 专注阅读模式：隐藏两侧栏，正文最大化 */
   const [focusMode, setFocusMode] = useState(false)
+  /** 窄屏（手机）下文档列表改为抽屉浮层，不再与阅读区争宽 */
+  const [isMobile, setIsMobile] = useState(false)
+  const [vw, setVw] = useState(0)
+  const [showList, setShowList] = useState(false)
+  const [showNotesDrawer, setShowNotesDrawer] = useState(false)
 
   /** 双语 PDF（BabelDOC）任务状态 */
   const [bdJobId, setBdJobId] = useState<string | null>(null)
@@ -74,12 +80,16 @@ export default function App() {
     if (!el || !baseWidth) return
     const avail = el.clientWidth - 24
     if (avail <= 0) return
-    setScale(clampScale(avail / baseWidth))
-  }, [baseWidth])
+    // 手机上允许缩得更小（0.15），PDF 才能适应窄屏宽度而非横向滚动
+    const minScale = isMobile ? 0.15 : SCALE_MIN
+    setScale(Math.max(minScale, Math.min(SCALE_MAX, +(avail / baseWidth).toFixed(2))))
+  }, [baseWidth, isMobile])
 
   useEffect(() => {
     const onResize = () => {
       const vw = window.innerWidth
+      setIsMobile(vw < MOBILE)
+      setVw(vw)
       setShowSidebar(vw >= NARROW)
       setShowNotes(vw >= VERY_NARROW)
       const usable = vw - (vw >= NARROW ? wSidebar : 0) - (vw >= VERY_NARROW ? wNotes : 0)
@@ -139,6 +149,10 @@ export default function App() {
     const t = window.setTimeout(() => fitWidth(), 50)
     return () => window.clearTimeout(t)
   }, [focusMode, fitWidth])
+
+  // 打开文档后自动收起移动端列表抽屉（桌面端 showList 不参与渲染，无副作用）
+  const openedDocId = currentDoc?.id
+  useEffect(() => { setShowList(false) }, [openedDocId])
 
   /** 面板布局保存的防抖 timer */
   const panelSaveTimer = useRef<number | null>(null)
@@ -283,8 +297,11 @@ export default function App() {
       }}>
         <button
           className="btn-ghost" style={{ padding: '4px 8px' }}
-          title={showSidebar ? '收起侧栏' : '展开侧栏'}
-          onClick={() => setShowSidebar((v) => { savePanelPrefs({ showSidebar: !v }); return !v })}
+          title={isMobile ? '文档列表' : showSidebar ? '收起侧栏' : '展开侧栏'}
+          onClick={() => {
+            if (isMobile) { setShowList((v) => !v); return }
+            setShowSidebar((v) => { savePanelPrefs({ showSidebar: !v }); return !v })
+          }}
         >☰</button>
         <strong style={{ fontSize: 14, whiteSpace: 'nowrap' }}>Paper Reader</strong>
 
@@ -386,23 +403,48 @@ export default function App() {
           >⚙{aiReady ? '' : '!'}</button>
           <button
             className="btn-ghost" style={{ padding: '4px 8px' }}
-            title={showNotes ? '收起笔记' : '展开笔记'}
-            onClick={() => setShowNotes((v) => { savePanelPrefs({ showNotes: !v }); return !v })}
+            title={isMobile ? (showNotesDrawer ? '收起笔记' : '展开笔记') : showNotes ? '收起笔记' : '展开笔记'}
+            onClick={() => {
+              if (isMobile) { setShowNotesDrawer((v) => !v); return }
+              setShowNotes((v) => { savePanelPrefs({ showNotes: !v }); return !v })
+            }}
           >📝</button>
         </div>
       </header>
 
       {/* ---------- 主体 ---------- */}
       <div style={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
-        {showSidebar && (
+        {/* 窄屏硬性隐藏：持久化面板偏好会把可见性顶回 true，不能只靠 resize 置位 */}
+        {showSidebar && !isMobile && (
           <>
             <Sidebar width={wSidebar} />
             <Resizer side="left" min={180} max={420} onResize={(w) => { setWSidebar(w); savePanelPrefs({ sidebar: w }) }} />
           </>
         )}
 
-        <DocumentList width={wList} />
-        <Resizer side="left" min={240} max={520} onResize={(w) => { setWList(w); savePanelPrefs({ list: w }) }} />
+        {isMobile ? (
+          // 手机：文档列表抽屉浮层，不挤压阅读区；未打开文档时常开（即文库页）
+          (showList || !currentDoc) && (
+            <>
+              <div
+                style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 60 }}
+                onClick={() => { if (currentDoc) setShowList(false) }}
+              />
+              <div style={{
+                position: 'fixed', left: 0, top: 46, bottom: 0, zIndex: 61,
+                width: Math.min(340, Math.max(260, Math.round(vw * 0.85))),
+                boxShadow: '2px 0 16px rgba(0,0,0,.35)', display: 'flex',
+              }}>
+                <DocumentList width={Math.min(340, Math.max(260, Math.round(vw * 0.85)))} />
+              </div>
+            </>
+          )
+        ) : (
+          <>
+            <DocumentList width={wList} />
+            <Resizer side="left" min={240} max={520} onResize={(w) => { setWList(w); savePanelPrefs({ list: w }) }} />
+          </>
+        )}
 
         <main
           ref={mainRef}
@@ -433,10 +475,27 @@ export default function App() {
           )}
         </main>
 
-        {showNotes && (
+        {showNotes && !isMobile && (
           <>
             <Resizer side="right" min={240} max={520} onResize={(w) => { setWNotes(w); savePanelPrefs({ notes: w }) }} />
             <RightPanel width={wNotes} />
+          </>
+        )}
+
+        {/* 手机：笔记面板右侧抽屉，点顶栏 📝 开关 */}
+        {isMobile && showNotesDrawer && (
+          <>
+            <div
+              style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 60 }}
+              onClick={() => setShowNotesDrawer(false)}
+            />
+            <div style={{
+              position: 'fixed', right: 0, top: 46, bottom: 0, zIndex: 61,
+              width: Math.min(340, Math.max(260, Math.round(vw * 0.85))),
+              boxShadow: '-2px 0 16px rgba(0,0,0,.35)', display: 'flex',
+            }}>
+              <RightPanel width={Math.min(340, Math.max(260, Math.round(vw * 0.85)))} />
+            </div>
           </>
         )}
       </div>
