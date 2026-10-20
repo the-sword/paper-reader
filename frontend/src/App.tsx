@@ -122,6 +122,15 @@ export default function App() {
   /** 面板布局保存的防抖 timer */
   const panelSaveTimer = useRef<number | null>(null)
 
+  // 切换文档时向后端确认双语 PDF 是否已生成，避免重复生成
+  useEffect(() => {
+    if (!currentDoc) return
+    const id = currentDoc.id
+    void api.babelDocStatus(id)
+      .then((r) => setBdReady((m) => ({ ...m, [id]: r.generated })))
+      .catch(() => { /* 忽略 */ })
+  }, [currentDoc])
+
   /** 启动双语 PDF 任务并轮询进度 */
   const startBilingualPdf = async () => {
     if (!currentDoc || bdRunning) return

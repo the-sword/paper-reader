@@ -320,6 +320,21 @@ def cancel_babeldoc(job_id: str) -> dict[str, Any]:
     return {"ok": ok}
 
 
+@router.get("/babeldoc/{doc_id}/status")
+def babeldoc_status(doc_id: str) -> dict[str, Any]:
+    """查询该文档是否已生成双语 PDF（供前端决定按钮显示）。"""
+    r = babeldoc_svc.get_babeldoc_pdf(doc_id)
+    if not r:
+        return {"generated": False}
+    import os
+
+    try:
+        size = os.path.getsize(r["dual"])
+    except OSError:
+        size = 0
+    return {"generated": True, "size": size}
+
+
 @router.get("/babeldoc/{doc_id}/pdf")
 def get_babeldoc_pdf(doc_id: str) -> Any:
     """返回已生成的双语 PDF。"""

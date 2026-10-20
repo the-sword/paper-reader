@@ -332,6 +332,8 @@ export const api = {
     req<BabelDocJob>(`/reading/babeldoc/job/${jobId}`),
   cancelBabelDoc: (jobId: string) =>
     req<{ ok: boolean }>(`/reading/babeldoc/job/${jobId}/cancel`, { method: 'POST' }),
+  babelDocStatus: (docId: string) =>
+    req<{ generated: boolean; size?: number }>(`/reading/babeldoc/${docId}/status`),
   babelDocPdfUrl: (docId: string) => `/reading/babeldoc/${docId}/pdf`,
 
   // ---- 界面偏好 ----
