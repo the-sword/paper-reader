@@ -284,33 +284,27 @@ EOM
 }
 
 # ---------------------------------------------------------------------------
-# 2.6 BabelDOC 资源预热
+# 2.6 BabelDOC 资源检查
 # ---------------------------------------------------------------------------
-warmup_babeldoc() {
-  [ "$DO_BUILD" = "1" ] || return 0
+# 说明：不强行下载。BabelDOC 首次翻译时会自动下载模型（约 430MB），
+# 但下载过程内部可能 sys.exit，在这里预跑容易误判失败。
+# 因此只做「检查 + 提示」：有缓存就报告，没有就说明首次会慢。
+check_babeldoc_assets() {
   local cache="$HOME/.cache/babeldoc"
-  if [ -d "$cache/models" ] && [ "$(du -sm "$cache" 2>/dev/null | cut -f1)" -gt 200 ]; then
-    ok "BabelDOC 模型缓存已就绪 ($(du -sh "$cache" | cut -f1))"
+  local model="$cache/models/doclayout_yolo_docstructbench_imgsz1024.onnx"
+
+  if [ -f "$model" ]; then
+    ok "BabelDOC 模型已就绪 ($(du -sh "$cache" 2>/dev/null | cut -f1))"
     return 0
   fi
 
-  info "预热 BabelDOC 模型（首次需下载约 430MB，可能较慢）"
-  local py="$PY_BIN"
-  [ -n "${py:-}" ] || py="python3"
-  if timeout 600 "$py" -c "
-import sys
-try:
-    from babeldoc.format.pdf.document_il.midend import layout_model_helper as m
-    m.LayoutModelHelper.get_instance() if hasattr(m,'LayoutModelHelper') else None
-    print('warmup ok')
-except Exception as e:
-    print('warmup skipped:', str(e)[:80])
-" 2>/dev/null | grep -q "warmup ok"; then
-    ok "模型预热完成 ($(du -sh "$cache" 2>/dev/null | cut -f1))"
-  else
-    warn "预热未完成，首次翻译时会自行下载（约 430MB）"
-    warn "若网络受限，可在本地下载后上传到 ~/.cache/babeldoc"
-  fi
+  warn "BabelDOC 模型未下载，首次翻译时会自动获取（约 430MB）"
+  cat <<'EOM'
+    若 VPS 网络受限，可先在本地跑一次翻译再打包上传：
+      tar -czf babeldoc-cache.tar.gz -C ~/.cache babeldoc
+      scp babeldoc-cache.tar.gz user@vps:~/
+      ssh user@vps 'tar -xzf ~/babeldoc-cache.tar.gz -C ~/.cache'
+EOM
 }
 
 # ---------------------------------------------------------------------------
@@ -489,7 +483,7 @@ EOF
     resolve_py_bin
     build_frontend
     setup_swap
-    warmup_babeldoc
+    check_babeldoc_assets
     setup_data
     install_service
     wait_ready || true
