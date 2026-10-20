@@ -77,9 +77,11 @@ check_env() {
 setup_python() {
   info "准备 Python 环境"
 
-  # 已存在 venv 且依赖齐全则复用
+  # 已存在 venv 且依赖齐全则复用；注意仍需检查可选依赖
+  # （BabelDOC），否则旧部署升级后双语 PDF 会一直 503
   if [ -x "$VENV/bin/python" ] && "$VENV/bin/python" -c "import fastapi" 2>/dev/null; then
     ok "复用已有 venv"
+    install_babeldoc_deps "$VENV/bin/python"
     return
   fi
 
