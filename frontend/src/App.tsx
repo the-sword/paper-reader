@@ -22,7 +22,7 @@ const SCALE_MIN = 0.4
 const SCALE_MAX = 4
 const SCALE_STEP = 0.15
 
-type ViewMode = 'pdf' | 'reading'
+type ViewMode = 'pdf' | 'reading' | 'bilingual'
 
 export default function App() {
   const currentDoc = useStore((s) => s.currentDoc)
@@ -147,8 +147,8 @@ export default function App() {
             setBdRunning(false); setBdJobId(null)
             if (st.status === 'done') {
               setBdReady((m) => ({ ...m, [currentDoc.id]: true }))
-              // 完成后直接在新标签页打开双语 PDF
-              window.open(api.babelDocPdfUrl(currentDoc.id), '_blank')
+              // 完成后直接在页面内切换到双语 PDF 视图
+              setView('bilingual')
             } else {
               setError(`双语 PDF 生成失败：${st.error ?? '未知原因'}`)
             }
@@ -215,7 +215,7 @@ export default function App() {
       const t = e.target as HTMLElement
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       if (e.metaKey || e.ctrlKey) return
-      if (view !== 'pdf') return
+      if (view === 'reading') return
       if (e.key === '+' || e.key === '=') { setScale((s) => clampScale(s + SCALE_STEP)); e.preventDefault() }
       else if (e.key === '-') { setScale((s) => clampScale(s - SCALE_STEP)); e.preventDefault() }
       else if (e.key === '0') { fitWidth(); e.preventDefault() }
@@ -267,17 +267,19 @@ export default function App() {
               title={hasSegments ? '段落流双语阅读' : '先解析全文'}
             >双语阅读</button>
             <button
-              className="seg"
-              title={bdReady[currentDoc.id] ? '打开双语 PDF' : '生成保留原排版的双语 PDF'}
+              className={`seg ${view === 'bilingual' ? 'active' : ''}`}
+              title={bdReady[currentDoc.id]
+                ? '在页面内阅读双语 PDF（保留原排版）'
+                : '生成保留原排版的双语 PDF'}
               onClick={() => {
                 if (bdReady[currentDoc.id]) {
-                  window.open(api.babelDocPdfUrl(currentDoc.id), '_blank')
+                  switchView('bilingual')
                 } else {
                   void startBilingualPdf()
                 }
               }}
               disabled={bdRunning}
-            >{bdRunning ? '生成中' : (bdReady[currentDoc.id] ? '打开双语PDF' : '双语PDF')}</button>
+            >{bdRunning ? '生成中' : '双语PDF'}</button>
           </div>
         )}
 
@@ -304,7 +306,7 @@ export default function App() {
             </span>
           )}
 
-          {view === 'pdf' && (
+          {(view === 'pdf' || view === 'bilingual') && (
             <>
               <button className="btn-ghost" title="缩小 (−)" onClick={() => setScale((s) => clampScale(s - SCALE_STEP))}>－</button>
               <span
@@ -352,7 +354,7 @@ export default function App() {
 
         <main
           ref={mainRef}
-          style={{ flex: '1 1 0', minWidth: 0, overflow: view === 'pdf' ? 'auto' : 'hidden', background: view === 'pdf' ? 'var(--bg-canvas)' : 'var(--bg)' }}
+          style={{ flex: '1 1 0', minWidth: 0, overflow: view === 'reading' ? 'hidden' : 'auto', background: view === 'reading' ? 'var(--bg)' : 'var(--bg-canvas)' }}
         >
           {!currentDoc ? (
             <div className="hint" style={{ padding: 40, textAlign: 'center' }}>
@@ -360,6 +362,18 @@ export default function App() {
             </div>
           ) : view === 'reading' ? (
             <ReadingView />
+          ) : view === 'bilingual' ? (
+            bdReady[currentDoc.id] ? (
+              <PdfViewer
+                url={api.babelDocPdfUrl(currentDoc.id)}
+                scale={scale}
+                onBaseWidth={setBaseWidth}
+              />
+            ) : (
+              <div className="hint" style={{ padding: 40, textAlign: 'center' }}>
+                尚未生成双语 PDF，请点击顶栏「双语PDF」生成
+              </div>
+            )
           ) : (
             <PdfViewer
               url={api.pdfUrl(currentDoc.id)}
