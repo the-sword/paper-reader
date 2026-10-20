@@ -4,12 +4,13 @@
 #
 # 用法（在 VPS 上，普通用户即可，不需要 root）：
 #
-#   ./deploy.sh                完整部署（venv + 前端构建 + systemd + 启动）
+#   ./deploy.sh                一键部署：装依赖 + 下载模型 + 构建前端 + 配置 + 启动
+#   ./deploy.sh --token <t>    同上，并设置访问口令（推荐 VPS 必须设置）
 #   ./deploy.sh --no-build     跳过前端构建（复用已有 dist/）
+#   ./deploy.sh --set-token <t> 仅修改访问口令（不跑完整部署）
 #   ./deploy.sh --status       查看服务状态
 #   ./deploy.sh --logs         跟踪日志
 #   ./deploy.sh --uninstall    卸载服务（保留数据）
-#   ./deploy.sh --token <t>    设置访问口令（推荐 VPS 必须设置）
 #
 #   无 npm 时自动下载 Node 到项目内 .node/（Linux x64/arm64，免 root）；
 #   可选环境变量: NODE_VERSION、NPM_REGISTRY（国内建议 https://registry.npmmirror.com）
@@ -39,10 +40,12 @@ NPM_REGISTRY="${NPM_REGISTRY:-}"
 DO_BUILD=1
 DRY_RUN=0
 ACTION=""
+TOKEN_GIVEN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-build)   DO_BUILD=0 ;;
-    --token)      [ $# -ge 2 ] || die "--token 需要参数"; AUTH_TOKEN="$2"; ACTION="set-token"; shift ;;
+    --token)      [ $# -ge 2 ] || die "--token 需要参数"; AUTH_TOKEN="$2"; TOKEN_GIVEN=1; shift ;;
+    --set-token)  [ $# -ge 2 ] || die "--set-token 需要参数"; AUTH_TOKEN="$2"; ACTION="set-token"; TOKEN_GIVEN=1; shift ;;
     --status|--logs|--uninstall|--help|-h) ACTION="$1" ;;
     --dry-run) DRY_RUN=1 ;;
     *) echo "未知参数: $1"; exit 1 ;;
@@ -316,9 +319,9 @@ EOM
 # ---------------------------------------------------------------------------
 # 2.6 BabelDOC 资源检查
 # ---------------------------------------------------------------------------
-# 说明：不强行下载。BabelDOC 首次翻译时会自动下载模型（约 430MB），
-# 但下载过程内部可能 sys.exit，在这里预跑容易误判失败。
-# 因此只做「检查 + 提示」：有缓存就报告，没有就说明首次会慢。
+# 说明：best-effort 预下载。babeldoc --warmup 内部可能 sys.exit，
+# 退出码不可信，一律以模型文件是否落盘为准；超时/失败只告警不阻断，
+# 首次翻译时仍会按需自动下载。可用 BABELDOC_WARMUP=0 跳过。
 check_babeldoc_assets() {
   local cache="$HOME/.cache/babeldoc"
   local model="$cache/models/doclayout_yolo_docstructbench_imgsz1024.onnx"
@@ -328,7 +331,31 @@ check_babeldoc_assets() {
     return 0
   fi
 
-  warn "BabelDOC 模型未下载，首次翻译时会自动获取（约 430MB）"
+  # 没装 pdf2zh_next 就没必要下载
+  resolve_py_bin
+  if ! "$PY_BIN" -c "import pdf2zh_next" 2>/dev/null; then
+    warn "未安装 pdf2zh_next，跳过 BabelDOC 模型预下载"
+    return 0
+  fi
+
+  if [ "${BABELDOC_WARMUP:-1}" != "1" ]; then
+    warn "BabelDOC 模型未下载，首次翻译时会自动获取（约 430MB）"
+    return 0
+  fi
+
+  info "预下载 BabelDOC 模型（约 430MB，最长等待 15 分钟）"
+  if [ -x "$VENV/bin/babeldoc" ]; then
+    timeout 900 "$VENV/bin/babeldoc" --warmup >/dev/null 2>&1 || true
+  else
+    timeout 900 "$PY_BIN" -c 'import sys; sys.argv=["babeldoc","--warmup"]; from babeldoc.main import main; main()' >/dev/null 2>&1 || true
+  fi
+
+  if [ -f "$model" ]; then
+    ok "BabelDOC 模型下载完成 ($(du -sh "$cache" 2>/dev/null | cut -f1))"
+    return 0
+  fi
+
+  warn "BabelDOC 模型预下载未完成，首次翻译时会自动获取（约 430MB）"
   cat <<'EOM'
     若 VPS 网络受限，可先在本地跑一次翻译再打包上传：
       tar -czf babeldoc-cache.tar.gz -C ~/.cache babeldoc
@@ -496,7 +523,7 @@ case "$ACTION" in
   项目目录:   $ROOT
   数据目录:   $LIB_ROOT
   监听地址:   $HOST:$PORT
-  访问口令:   ${AUTH_TOKEN:+已设置}${AUTH_TOKEN:-未设置（仅本机访问）}
+  访问口令:   $([ -n "$AUTH_TOKEN" ] && echo 已设置 || echo 未设置（仅本机访问）)
   Python:     ${USE_SYSTEM_PY:-自动检测}
   前端构建:   $([ "$DO_BUILD" = "1" ] && echo 是 || echo 跳过)
   服务方式:   systemd user service
@@ -507,6 +534,15 @@ case "$ACTION" in
 =================================================================
 EOF
       exit 0
+    fi
+    # 未显式传口令时沿用 .env 中的旧值。否则重复部署重建前端会丢口令，
+    # 表现为「能打开页面但所有请求 401」
+    if [ -z "$AUTH_TOKEN" ] && [ -f "$ROOT/backend/.env" ]; then
+      AUTH_TOKEN="$(sed -n 's/^AUTH_TOKEN=//p' "$ROOT/backend/.env" | head -n1)"
+      [ -n "$AUTH_TOKEN" ] && info "沿用 backend/.env 中的访问口令"
+    fi
+    if [ "$TOKEN_GIVEN" = "1" ] && [ "$DO_BUILD" != "1" ]; then
+      warn "--no-build 不重建前端：新口令只写入后端，页面可能仍用旧口令"
     fi
     setup_python
     check_system_python
