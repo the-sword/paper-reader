@@ -251,6 +251,58 @@ def _find_output(files_dir: Path, stem: str) -> dict[str, str]:
     return {"mono": mono, "dual": dual}
 
 
+def split_dual_pdf(dual_path: str, out_path: str) -> int:
+    """把 BabelDOC dual PDF（原文页与译文页左右拼接的横向宽页）拆成竖版页。
+
+    dual 页面布局：宽 ≈ 2 × 原页宽，左半是原文、右半是译文。拆分方式：
+    对每个宽页复制两份，分别把 MediaBox/CropBox 裁到左半 / 右半，
+    依次输出为「原文页1、译文页1、原文页2、译文页2 …」。
+    内容流零改动，仅改页面裁剪框，速度快且无损。
+    返回拆分后的总页数。
+    """
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import RectangleObject
+
+    reader = PdfReader(dual_path)
+    writer = PdfWriter()
+    for page in reader.pages:
+        box = page.mediabox
+        w, h = float(box.width), float(box.height)
+        if w <= h:  # 竖版页（原文页本身就是竖版），原样保留
+            writer.add_page(page)
+            continue
+        half = w / 2
+        for x0 in (0.0, half):
+            pg = writer.add_blank_page(width=half, height=h)
+            pg.merge_page(page)  # 合并整页内容，靠裁剪框只露出对应半边
+            pg.mediabox = RectangleObject((x0, 0.0, x0 + half, h))
+            pg.cropbox = RectangleObject((x0, 0.0, x0 + half, h))
+    with open(out_path, "wb") as f:
+        writer.write(f)
+    return len(writer.pages)
+
+
+def _split_dual_if_wide(dual: str, doc_id: str, out_dir: Path) -> str:
+    """检测 dual PDF 是否为横向拼接页，是则拆分并返回拆分后路径。
+
+    拆分产物缓存为 <stem>.split.pdf，已存在则直接复用（翻译幂等重跑不重复拆）。
+    """
+    from pypdf import PdfReader
+
+    src = Path(dual)
+    out = src.parent / f"{src.stem}.split.pdf"
+    try:
+        first = PdfReader(dual).pages[0].mediabox
+        is_wide = float(first.width) > float(first.height)
+    except Exception:
+        return dual
+    if not is_wide:
+        return dual
+    if not (out.exists() and out.stat().st_size > 0):
+        split_dual_pdf(dual, str(out))
+    return str(out)
+
+
 async def translate_pdf_async(
     doc_id: str,
     pdf_path: Path,
@@ -411,10 +463,11 @@ async def translate_pdf_async(
     for k, v in saved_proxy.items():
         _os.environ[k] = v
 
-    # 找输出文件
+    # 找输出文件；dual 是横向拼接页时拆成竖版（原文/译文交替）供阅读器直接用
     outs = _find_output(out_dir, Path(pdf_path).stem)
     if not outs["dual"]:
         raise RuntimeError("BabelDOC 未生成双语 PDF")
+    outs["dual"] = _split_dual_if_wide(outs["dual"], doc_id, out_dir)
 
     return {
         "dual_pdf": outs["dual"],
@@ -437,6 +490,8 @@ def get_babeldoc_pdf(doc_id: str) -> dict[str, str] | None:
             mono = str(p)
     if not dual:
         return None
+    # 历史已生成的 dual 可能还是横向拼接页，读取时现拆（结果缓存复用）
+    dual = _split_dual_if_wide(dual, doc_id, d)
     return {"dual": dual, "mono": mono}
 
 
