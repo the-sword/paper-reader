@@ -16,6 +16,7 @@ interface State {
   search: string
   loading: boolean
   error: string | null
+  mainView: 'reader' | 'digest'
 
   // 阅读
   segments: Segment[]
@@ -35,6 +36,7 @@ interface State {
   setFolder: (id: string | null) => void
   setTag: (id: string | null) => void
   setSearch: (q: string) => void
+  setMainView: (v: 'reader' | 'digest') => void
   refreshAnnotations: (docId: string) => Promise<void>
   addAnnotation: (docId: string, page: number, rects: number[][], quote: string, color: string,
                   opts?: { segmentId?: string; side?: string; kind?: string
@@ -71,6 +73,7 @@ export const useStore = create<State>((set, get) => ({
   search: '',
   loading: false,
   error: null,
+  mainView: 'reader',
 
   segments: [],
   translations: {},
@@ -102,7 +105,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   openDocument: async (id) => {
-    set({ loading: true, error: null, segments: [], translations: {}, parseState: 'idle', parseProgress: 0 })
+    set({ loading: true, error: null, segments: [], translations: {}, parseState: 'idle', parseProgress: 0, mainView: 'reader' })
     try {
       const currentDoc = await api.getDocument(id)
       const annotations = await api.listAnnotations(id)
@@ -116,12 +119,14 @@ export const useStore = create<State>((set, get) => ({
   closeDocument: () =>
     set({ currentDoc: null, annotations: [], segments: [], translations: {} }),
 
+  setMainView: (v) => set({ mainView: v }),
+
   setFolder: (id) => {
-    set({ activeFolder: id, activeTag: null })
+    set({ activeFolder: id, activeTag: null, mainView: 'reader' })
     void get().refreshLibrary()
   },
   setTag: (id) => {
-    set({ activeTag: id, activeFolder: null })
+    set({ activeTag: id, activeFolder: null, mainView: 'reader' })
     void get().refreshLibrary()
   },
   setSearch: (q) => {

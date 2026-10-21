@@ -1,0 +1,396 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 960" width="1440" height="960" style="background:#0f172a; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', sans-serif;">
+  <defs>
+    <!-- 阴影滤镜 -->
+    <filter id="card-shadow" x="-4%" y="-2%" width="108%" height="106%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000000" flood-opacity="0.05" />
+    </filter>
+    <filter id="modal-shadow" x="-8%" y="-4%" width="116%" height="110%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#000000" flood-opacity="0.12" />
+    </filter>
+    
+    <!-- 线性渐变 -->
+    <linearGradient id="primary-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5" />
+      <stop offset="100%" stop-color="#6366f1" />
+    </linearGradient>
+    <linearGradient id="badge-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#ef4444" />
+    </linearGradient>
+    <linearGradient id="github-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#24292f" />
+      <stop offset="100%" stop-color="#090d16" />
+    </linearGradient>
+    <linearGradient id="twitter-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1d9bf0" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+  </defs>
+
+  <!-- ==================== 1. 应用主外框与基础背景 ==================== -->
+  <rect x="10" y="10" width="1420" height="940" rx="12" fill="#f8fafc" stroke="#334155" stroke-width="1.5" />
+
+  <!-- ==================== 2. 顶栏 (Header, 高度 50px) ==================== -->
+  <rect x="10" y="10" width="1420" height="50" rx="12" fill="#ffffff" />
+  <rect x="10" y="48" width="1420" height="12" fill="#ffffff" />
+  <line x1="10" y1="60" x2="1430" y2="60" stroke="#e2e8f0" stroke-width="1" />
+
+  <!-- 顶栏左侧：收起按钮 + Logo + 模式切换 -->
+  <rect x="24" y="22" width="28" height="26" rx="5" fill="#f1f5f9" />
+  <text x="32" y="39" font-size="14" fill="#475569">☰</text>
+
+  <text x="64" y="40" font-size="15" font-weight="700" fill="#0f172a" letter-spacing="-0.3">Paper Reader</text>
+  
+  <rect x="168" y="23" width="60" height="24" rx="12" fill="#eff6ff" />
+  <circle cx="178" cy="35" r="3" fill="#2563eb" />
+  <text x="187" y="39" font-size="11" font-weight="600" fill="#2563eb">v2.4</text>
+
+  <!-- 顶栏右侧操作区 -->
+  <!-- 模式切换：PDF / 双语PDF -->
+  <rect x="245" y="20" width="148" height="30" rx="6" fill="#f1f5f9" />
+  <rect x="247" y="22" width="48" height="26" rx="5" fill="#ffffff" filter="url(#card-shadow)" />
+  <text x="261" y="39" font-size="12" font-weight="600" fill="#0f172a">PDF</text>
+  <text x="306" y="39" font-size="12" font-weight="500" fill="#64748b">双语PDF</text>
+
+  <!-- 右侧实用工具组 -->
+  <g transform="translate(1020, 20)">
+    <!-- 专注模式按钮 -->
+    <rect x="0" y="0" width="56" height="30" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
+    <text x="12" y="20" font-size="12" fill="#475569">专注</text>
+
+    <!-- 排版 Aa -->
+    <rect x="64" y="0" width="36" height="30" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
+    <text x="74" y="20" font-size="12" font-weight="600" fill="#475569">Aa</text>
+
+    <!-- 缩放控制 -->
+    <rect x="108" y="0" width="120" height="30" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
+    <text x="118" y="20" font-size="13" fill="#64748b">－</text>
+    <text x="136" y="19" font-size="11" font-weight="500" fill="#334155">100%</text>
+    <text x="175" y="20" font-size="13" fill="#64748b">＋</text>
+    <text x="194" y="19" font-size="11" fill="#64748b">自适应</text>
+
+    <!-- arXiv 快速检索 -->
+    <rect x="236" y="0" width="56" height="30" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
+    <text x="247" y="20" font-size="12" fill="#475569">arXiv</text>
+
+    <!-- 队列指示器 (已空闲状态) -->
+    <circle cx="304" cy="15" r="4" fill="#10b981" />
+    <text x="313" y="19" font-size="11" fill="#64748b">已同步</text>
+
+    <!-- 设置齿轮 -->
+    <rect x="360" y="0" width="32" height="30" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
+    <text x="369" y="20" font-size="13" fill="#475569">⚙</text>
+  </g>
+
+  <!-- ==================== 3. 左侧侧边栏 (Sidebar, 宽 230px) ==================== -->
+  <g transform="translate(10, 60)">
+    <rect x="0" y="0" width="230" height="890" fill="#ffffff" />
+    <line x1="230" y1="0" x2="230" y2="890" stroke="#e2e8f0" stroke-width="1" />
+
+    <!-- 模块一：核心导航 -->
+    <g transform="translate(12, 14)">
+      <!-- 全部文献 -->
+      <rect x="0" y="0" width="206" height="34" rx="6" fill="transparent" />
+      <text x="10" y="22" font-size="13" fill="#475569">📚 全部文献</text>
+      <rect x="172" y="8" width="26" height="18" rx="9" fill="#f1f5f9" />
+      <text x="177" y="21" font-size="10" font-weight="600" fill="#64748b">38</text>
+
+      <!-- ★ 每日情报 (选中高亮态) -->
+      <g transform="translate(0, 40)">
+        <rect x="0" y="0" width="206" height="36" rx="6" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1" />
+        <circle cx="16" cy="18" r="4" fill="#2563eb" />
+        <text x="26" y="22" font-size="13" font-weight="700" fill="#1d4ed8">📡 每日情报</text>
+        <!-- NEW 徽标 -->
+        <rect x="156" y="8" width="42" height="20" rx="10" fill="url(#badge-grad)" />
+        <text x="163" y="22" font-size="10" font-weight="700" fill="#ffffff">今日 15</text>
+      </g>
+    </g>
+
+    <!-- 分割线 -->
+    <line x1="16" y1="102" x2="214" y2="102" stroke="#f1f5f9" stroke-width="1" />
+
+    <!-- 文件夹管理 -->
+    <g transform="translate(14, 114)">
+      <text x="8" y="16" font-size="11" font-weight="700" fill="#94a3b8" letter-spacing="0.5">FOLDER / 文件夹</text>
+      <text x="188" y="16" font-size="14" fill="#94a3b8" cursor="pointer">＋</text>
+
+      <g transform="translate(0, 26)">
+        <rect x="0" y="0" width="202" height="28" rx="5" fill="transparent" />
+        <text x="8" y="19" font-size="12" fill="#334155">📁 3D 重建与 SLAM</text>
+        <text x="178" y="19" font-size="11" fill="#94a3b8">12</text>
+      </g>
+      <g transform="translate(0, 56)">
+        <rect x="0" y="0" width="202" height="28" rx="5" fill="transparent" />
+        <text x="8" y="19" font-size="12" fill="#334155">📁 3DGS &amp; NeRF</text>
+        <text x="182" y="19" font-size="11" fill="#94a3b8">9</text>
+      </g>
+      <g transform="translate(0, 86)">
+        <rect x="0" y="0" width="202" height="28" rx="5" fill="transparent" />
+        <text x="8" y="19" font-size="12" fill="#334155">📁 具身智能感知</text>
+        <text x="182" y="19" font-size="11" fill="#94a3b8">6</text>
+      </g>
+    </g>
+
+    <!-- 分割线 -->
+    <line x1="16" y1="242" x2="214" y2="242" stroke="#f1f5f9" stroke-width="1" />
+
+    <!-- 标签管理 -->
+    <g transform="translate(14, 256)">
+      <text x="8" y="16" font-size="11" font-weight="700" fill="#94a3b8" letter-spacing="0.5">TAGS / 标签</text>
+      <g transform="translate(4, 26)">
+        <rect x="0" y="0" width="82" height="22" rx="11" fill="#fef3c7" />
+        <text x="10" y="15" font-size="11" fill="#b45309"># CVPR2024</text>
+
+        <rect x="88" y="0" width="56" height="22" rx="11" fill="#e0e7ff" />
+        <text x="96" y="15" font-size="11" fill="#4338ca"># SLAM</text>
+
+        <rect x="0" y="28" width="68" height="22" rx="11" fill="#dcfce7" />
+        <text x="8" y="43" font-size="11" fill="#15803d"># 点云</text>
+
+        <rect x="74" y="28" width="76" height="22" rx="11" fill="#fce7f3" />
+        <text x="82" y="43" font-size="11" fill="#be185d"># Gaussian</text>
+      </g>
+    </g>
+
+    <!-- 底部：存储与调度状态微件 -->
+    <g transform="translate(14, 800)">
+      <rect x="0" y="0" width="202" height="74" rx="8" fill="#f8fafc" stroke="#e2e8f0" />
+      <circle cx="16" cy="18" r="4" fill="#22c55e" />
+      <text x="26" y="21" font-size="11" font-weight="600" fill="#334155">每日定时任务: 已就绪</text>
+      <text x="14" y="38" font-size="10" fill="#64748b">⏰ 每天 08:00 (Asia/Shanghai)</text>
+      <text x="14" y="52" font-size="10" fill="#64748b">⚡ 下次抓取: 明天 08:00 (自动)</text>
+      <rect x="14" y="58" width="174" height="4" rx="2" fill="#e2e8f0" />
+      <rect x="14" y="58" width="142" height="4" rx="2" fill="#3b82f6" />
+    </g>
+  </g>
+
+  <!-- ==================== 4. 主内容看板：每日情报 (Daily Intelligence Radar) ==================== -->
+  <g transform="translate(240, 60)">
+    <!-- 4.1 看板顶区 (Dashboard Header) -->
+    <rect x="0" y="0" width="1190" height="88" fill="#ffffff" />
+    <line x1="0" y1="88" x2="1190" y2="88" stroke="#e2e8f0" stroke-width="1" />
+
+    <g transform="translate(24, 18)">
+      <text x="0" y="22" font-size="18" font-weight="800" fill="#0f172a">每日研究情报 (2026-10-21)</text>
+      <text x="240" y="22" font-size="12" fill="#64748b">已自动聚合 4 类渠道最新热点 · 本地已过滤 8 条已读</text>
+      
+      <!-- 快捷操作区 -->
+      <g transform="translate(860, 4)">
+        <!-- 立即手动拉取 -->
+        <rect x="0" y="0" width="96" height="30" rx="6" fill="#f1f5f9" stroke="#cbd5e1" cursor="pointer" />
+        <text x="12" y="20" font-size="11" font-weight="600" fill="#334155">🔄 立即刷新</text>
+
+        <!-- 订阅设置 -->
+        <rect x="106" y="0" width="110" height="30" rx="6" fill="#4f46e5" cursor="pointer" />
+        <text x="118" y="20" font-size="11" font-weight="600" fill="#ffffff">⚙ 调整订阅主题</text>
+      </g>
+
+      <!-- 搜索关键词 Chips 栏 -->
+      <g transform="translate(0, 38)">
+        <text x="0" y="19" font-size="11" font-weight="600" fill="#64748b">当前监控主题:</text>
+        
+        <rect x="80" y="5" width="136" height="22" rx="11" fill="#eff6ff" stroke="#bfdbfe" />
+        <text x="90" y="20" font-size="11" font-weight="500" fill="#1d4ed8">3D Reconstruction ✕</text>
+
+        <rect x="222" y="5" width="168" height="22" rx="11" fill="#eff6ff" stroke="#bfdbfe" />
+        <text x="232" y="20" font-size="11" font-weight="500" fill="#1d4ed8">3D Gaussian Splatting ✕</text>
+
+        <rect x="396" y="5" width="132" height="22" rx="11" fill="#eff6ff" stroke="#bfdbfe" />
+        <text x="406" y="20" font-size="11" font-weight="500" fill="#1d4ed8">Point Cloud SLAM ✕</text>
+
+        <rect x="534" y="5" width="76" height="22" rx="11" fill="#f8fafc" stroke="#cbd5e1" stroke-dasharray="2 2" />
+        <text x="544" y="20" font-size="11" fill="#64748b">＋ 添加词</text>
+      </g>
+    </g>
+
+    <!-- 4.2 双列主工作区 (左列 590px：arXiv 论文；右列 540px：GitHub 代码 + HuggingFace 数据集 + Twitter 精选) -->
+    
+    <!-- ========== 左列：📄 核心论文 (arXiv Top 5) ========== -->
+    <g transform="translate(24, 102)">
+      <!-- 模块标题栏 -->
+      <rect x="0" y="0" width="580" height="36" rx="6" fill="#f1f5f9" />
+      <text x="14" y="23" font-size="13" font-weight="700" fill="#0f172a">📄 前沿论文精选 (arXiv · 5篇高热度)</text>
+      <text x="440" y="23" font-size="11" fill="#64748b">按综合热度排序</text>
+
+      <!-- 论文卡片 1 (高亮精品) -->
+      <g transform="translate(0, 46)">
+        <rect x="0" y="0" width="580" height="136" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1" filter="url(#card-shadow)" />
+        <rect x="0" y="0" width="5" height="136" rx="2" fill="#4f46e5" />
+        
+        <text x="18" y="24" font-size="14" font-weight="700" fill="#0f172a">1. SuperSplat: Real-Time 3D Gaussian Splatting at 120 FPS</text>
+        <text x="18" y="44" font-size="11" fill="#64748b">Y. Zhang, D. Cremers et al. · 发布于 4小时前 · 来源: cs.CV, cs.GR</text>
+        
+        <!-- 标签徽章 -->
+        <rect x="18" y="54" width="72" height="18" rx="4" fill="#fef2f2" />
+        <text x="24" y="67" font-size="10" font-weight="600" fill="#dc2626">🔥 今日激增</text>
+        <rect x="96" y="54" width="60" height="18" rx="4" fill="#f0fdf4" />
+        <text x="102" y="67" font-size="10" font-weight="600" fill="#16a34a">附开源代码</text>
+
+        <text x="18" y="92" font-size="11.5" fill="#475569">
+          TL;DR: 提出一种新型分层剪枝算法，在保持高保真渲染细节的同时将 3DGS 显存削减 68%...
+        </text>
+
+        <!-- 卡片底部快捷操作 -->
+        <g transform="translate(18, 104)">
+          <rect x="0" y="0" width="94" height="24" rx="4" fill="#4f46e5" cursor="pointer" />
+          <text x="10" y="16" font-size="11" font-weight="600" fill="#ffffff">📥 导入阅读器</text>
+
+          <rect x="102" y="0" width="96" height="24" rx="4" fill="#f1f5f9" stroke="#cbd5e1" cursor="pointer" />
+          <text x="112" y="16" font-size="11" fill="#334155">⚡ 双语PDF排版</text>
+
+          <text x="500" y="17" font-size="11" fill="#94a3b8" cursor="pointer">忽略 ✕</text>
+        </g>
+      </g>
+
+      <!-- 论文卡片 2 -->
+      <g transform="translate(0, 192)">
+        <rect x="0" y="0" width="580" height="130" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1" filter="url(#card-shadow)" />
+        <text x="18" y="24" font-size="13.5" font-weight="700" fill="#0f172a">2. Point-Diffusion-3D: Direct Geometry Generation via Latent Flow</text>
+        <text x="18" y="44" font-size="11" fill="#64748b">Stanford AI Lab · 发布于 7小时前 · cs.RO, cs.AI</text>
+        <text x="18" y="74" font-size="11.5" fill="#475569">
+          TL;DR: 摒弃传统网格后处理流程，实现单步生成密集 3D 点云，且具备强几何拓扑一致性...
+        </text>
+        <g transform="translate(18, 96)">
+          <rect x="0" y="0" width="94" height="24" rx="4" fill="#f1f5f9" stroke="#cbd5e1" cursor="pointer" />
+          <text x="10" y="16" font-size="11" fill="#334155">📥 导入阅读器</text>
+          <rect x="102" y="0" width="80" height="24" rx="4" fill="#f1f5f9" stroke="#cbd5e1" cursor="pointer" />
+          <text x="114" y="16" font-size="11" fill="#334155">查看摘要</text>
+          <text x="500" y="17" font-size="11" fill="#94a3b8" cursor="pointer">忽略 ✕</text>
+        </g>
+      </g>
+
+      <!-- 论文卡片 3 (已在库中标记) -->
+      <g transform="translate(0, 332)">
+        <rect x="0" y="0" width="580" height="130" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1" filter="url(#card-shadow)" />
+        <text x="18" y="24" font-size="13.5" font-weight="700" fill="#0f172a">3. Gaussian-SLAM: Photo-Realistic Dense SLAM with 3D Gaussians</text>
+        <text x="18" y="44" font-size="11" fill="#64748b">Imperial College · 发布于 昨天 · 引用 14</text>
+        <rect x="18" y="52" width="62" height="18" rx="4" fill="#eff6ff" />
+        <text x="24" y="65" font-size="10" font-weight="600" fill="#2563eb">✓ 已在库中</text>
+        
+        <text x="18" y="88" font-size="11.5" fill="#64748b">
+          TL;DR: 将 3D Gaussian 作为唯一场景表征的密集视觉 SLAM 方案，实时生成真实感地图...
+        </text>
+        <g transform="translate(18, 98)">
+          <rect x="0" y="0" width="94" height="24" rx="4" fill="#f8fafc" stroke="#94a3b8" cursor="pointer" />
+          <text x="16" y="16" font-size="11" font-weight="600" fill="#2563eb">📖 立即阅读</text>
+          <text x="500" y="17" font-size="11" fill="#94a3b8" cursor="pointer">移除 ✕</text>
+        </g>
+      </g>
+
+      <!-- 论文卡片 4 & 5 (紧凑视图) -->
+      <g transform="translate(0, 472)">
+        <rect x="0" y="0" width="580" height="74" rx="6" fill="#ffffff" stroke="#e2e8f0" />
+        <text x="16" y="24" font-size="12.5" font-weight="600" fill="#0f172a">4. Robust-RGBD-Bundle: Global Optimization for Sensor Rig</text>
+        <text x="16" y="44" font-size="10.5" fill="#64748b">ETH Zurich · 发布于 昨天 · 关注主题匹配度 94%</text>
+        <rect x="480" y="24" width="84" height="24" rx="4" fill="#f1f5f9" stroke="#cbd5e1" />
+        <text x="492" y="40" font-size="11" fill="#334155">📥 导入阅读</text>
+      </g>
+      <g transform="translate(0, 554)">
+        <rect x="0" y="0" width="580" height="74" rx="6" fill="#ffffff" stroke="#e2e8f0" />
+        <text x="16" y="24" font-size="12.5" font-weight="600" fill="#0f172a">5. OmniSplat: Generalized 3D Reconstruction from Video In-The-Wild</text>
+        <text x="16" y="44" font-size="10.5" fill="#64748b">Oxford Robotics · 发布于 昨天 · 关注主题匹配度 91%</text>
+        <rect x="480" y="24" width="84" height="24" rx="4" fill="#f1f5f9" stroke="#cbd5e1" />
+        <text x="492" y="40" font-size="11" fill="#334155">📥 导入阅读</text>
+      </g>
+    </g>
+
+    <!-- ========== 右列：💻 GitHub 开源代码 + 🗂 数据集 + 🐦 Twitter ========== -->
+    <g transform="translate(624, 102)">
+      <!-- 模块 2：💻 GitHub 热门开源 (Top 5 增速排行) -->
+      <g transform="translate(0, 0)">
+        <rect x="0" y="0" width="536" height="36" rx="6" fill="url(#github-grad)" />
+        <text x="14" y="23" font-size="13" font-weight="700" fill="#ffffff">💻 热门开源代码 (GitHub · 活跃与增速)</text>
+        <text x="440" y="23" font-size="11" fill="#94a3b8">过去 24 小时</text>
+
+        <!-- GitHub 项目 1 -->
+        <g transform="translate(0, 46)">
+          <rect x="0" y="0" width="536" height="96" rx="8" fill="#ffffff" stroke="#e2e8f0" filter="url(#card-shadow)" />
+          <text x="16" y="22" font-size="13" font-weight="700" fill="#0969da">nerfstudio-project / nerfstudio</text>
+          <rect x="448" y="10" width="76" height="20" rx="10" fill="#fef3c7" />
+          <text x="456" y="24" font-size="10" font-weight="700" fill="#b45309">⭐ +142/天</text>
+
+          <text x="16" y="44" font-size="11" fill="#475569">A collaboration friendly studio for NeRFs and 3D Gaussian Splatting.</text>
+          
+          <circle cx="20" cy="72" r="4" fill="#3572A5" />
+          <text x="30" y="76" font-size="10.5" fill="#64748b">Python · ⭐ 9,240 · 🍴 1,180 · 活跃度极高</text>
+          <text x="450" y="76" font-size="11" font-weight="600" fill="#0969da" cursor="pointer">打开仓库 ↗</text>
+        </g>
+
+        <!-- GitHub 项目 2 -->
+        <g transform="translate(0, 150)">
+          <rect x="0" y="0" width="536" height="90" rx="8" fill="#ffffff" stroke="#e2e8f0" filter="url(#card-shadow)" />
+          <text x="16" y="22" font-size="13" font-weight="700" fill="#0969da">graphdeco-inria / gaussian-splatting-cuda</text>
+          <rect x="454" y="10" width="70" height="20" rx="10" fill="#fef3c7" />
+          <text x="462" y="24" font-size="10" font-weight="700" fill="#b45309">⭐ +88/天</text>
+          <text x="16" y="44" font-size="11" fill="#475569">High-performance rasterization pipeline rewritten in native CUDA kernel.</text>
+          <circle cx="20" cy="68" r="4" fill="#f34b7d" />
+          <text x="30" y="72" font-size="10.5" fill="#64748b">C++ / CUDA · ⭐ 3,890 · 最新 commit 2小时前</text>
+          <text x="450" y="72" font-size="11" font-weight="600" fill="#0969da" cursor="pointer">打开仓库 ↗</text>
+        </g>
+      </g>
+
+      <!-- 模块 3：🗂 热门开源数据集 (HuggingFace Datasets) -->
+      <g transform="translate(0, 260)">
+        <rect x="0" y="0" width="536" height="34" rx="6" fill="#fef3c7" stroke="#fde68a" />
+        <text x="14" y="22" font-size="12.5" font-weight="700" fill="#92400e">🗂 开源数据集新发布 (HuggingFace)</text>
+        <text x="440" y="22" font-size="10.5" fill="#b45309">按下载激增</text>
+
+        <!-- 数据集卡片 -->
+        <g transform="translate(0, 42)">
+          <rect x="0" y="0" width="536" height="82" rx="6" fill="#ffffff" stroke="#e2e8f0" />
+          <text x="16" y="22" font-size="12" font-weight="700" fill="#0f172a">Open3D-Lab / ScanNet-Synthetic-3D (v2)</text>
+          <text x="16" y="42" font-size="10.5" fill="#475569">大规模室内带材质高保真 3D 扫描数据集，适配 NeRF &amp; 3DGS 训练。</text>
+          <rect x="16" y="52" width="76" height="18" rx="4" fill="#f1f5f9" />
+          <text x="22" y="65" font-size="10" fill="#475569">⬇ 2.4k/本周</text>
+          <rect x="98" y="52" width="60" height="18" rx="4" fill="#eff6ff" />
+          <text x="104" y="65" font-size="10" fill="#2563eb">42.5 GB</text>
+          <text x="450" y="66" font-size="11" font-weight="600" fill="#b45309" cursor="pointer">获取数据 ↗</text>
+        </g>
+      </g>
+
+      <!-- 模块 4：🐦 领域动态速递 (Twitter / X Curated Focus) -->
+      <g transform="translate(0, 404)">
+        <rect x="0" y="0" width="536" height="34" rx="6" fill="url(#twitter-grad)" />
+        <text x="14" y="22" font-size="12.5" font-weight="700" fill="#ffffff">🐦 领域专家动态速递 (X / Twitter RSS)</text>
+        <text x="446" y="22" font-size="10.5" fill="#e0f2fe">学者/实验室</text>
+
+        <!-- 推文卡片 1 -->
+        <g transform="translate(0, 42)">
+          <rect x="0" y="0" width="536" height="90" rx="6" fill="#ffffff" stroke="#e2e8f0" />
+          <circle cx="26" cy="22" r="12" fill="#e2e8f0" />
+          <text x="22" y="26" font-size="11">👨‍🔬</text>
+          <text x="46" y="20" font-size="12" font-weight="700" fill="#0f172a">Jon Barron (@jonbarron)</text>
+          <text x="220" y="20" font-size="10" fill="#94a3b8">· 5小时前</text>
+          <text x="16" y="46" font-size="11" fill="#334155">
+            "Excited to announce our new work on unbounded 3DGS! Full rendering speedups without any artifact... Demo code released on GitHub today!"
+          </text>
+          <text x="16" y="74" font-size="10.5" font-weight="600" fill="#1d9bf0" cursor="pointer">🔗 查看原推文及视频演示 ↗</text>
+        </g>
+
+        <!-- 推文卡片 2 -->
+        <g transform="translate(0, 140)">
+          <rect x="0" y="0" width="536" height="76" rx="6" fill="#ffffff" stroke="#e2e8f0" />
+          <circle cx="26" cy="22" r="12" fill="#e2e8f0" />
+          <text x="22" y="26" font-size="11">🏢</text>
+          <text x="46" y="20" font-size="12" font-weight="700" fill="#0f172a">Taichi Graphics (@TaichiGraphics)</text>
+          <text x="240" y="20" font-size="10" fill="#94a3b8">· 昨天</text>
+          <text x="16" y="44" font-size="11" fill="#334155">
+            "We integrated Python-based sparse voxelization for Gaussian reconstruction..."
+          </text>
+          <text x="16" y="64" font-size="10.5" font-weight="600" fill="#1d9bf0" cursor="pointer">🔗 查看原推文 ↗</text>
+        </g>
+      </g>
+    </g>
+  </g>
+
+  <!-- ==================== 5. 图例与设计说明注解卡片 (浮动在右下侧) ==================== -->
+  <g transform="translate(1080, 830)" filter="url(#modal-shadow)">
+    <rect x="0" y="0" width="330" height="106" rx="8" fill="#1e293b" />
+    <rect x="0" y="0" width="4" height="106" rx="2" fill="#38bdf8" />
+    <text x="16" y="22" font-size="11.5" font-weight="700" fill="#f8fafc">💡 UI 集成设计说明</text>
+    <text x="16" y="42" font-size="10.5" fill="#94a3b8">1. 左侧栏新增一级入口「📡 每日情报」，未读徽标</text>
+    <text x="16" y="58" font-size="10.5" fill="#94a3b8">2. 左列主攻论文 (带「导入阅读器 / 双语PDF」直通)</text>
+    <text x="16" y="74" font-size="10.5" fill="#94a3b8">3. 右列汇聚代码增速 + 数据集 + 重点推文动态</text>
+    <text x="16" y="90" font-size="10.5" fill="#94a3b8">4. 每日 08:00 后台静默抓取，支持手动单键刷新</text>
+  </g>
+</svg>

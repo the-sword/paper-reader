@@ -127,6 +127,40 @@ export interface Reference {
   year: number | null
   venue: string
 }
+export interface DigestItem {
+  id: string
+  source: 'arxiv' | 'github'
+  date: string
+  title: string
+  url: string
+  summary: string
+  score: number
+  meta: {
+    authors?: string[]
+    published?: string
+    categories?: string[]
+    doi?: string
+    pdf_url?: string
+    already_in_library?: boolean
+    imported_doc_id?: string
+    arxiv_id?: string
+    stars?: number
+    forks?: number
+    star_growth?: number
+    language?: string
+    updated_at?: string
+    created_at?: string
+  }
+  status: 'new' | 'imported' | 'ignored'
+}
+
+export interface DigestResponse {
+  date: string
+  items: DigestItem[]
+  counts: { arxiv: number; github: number }
+  cached?: boolean
+}
+
 export interface SelfCheckResult {
   cpu: { cores: number; baseline_s: number; level: string; desc: string }
   memory: { total_mb: number; available_mb: number; swap_mb: number; level: string; has_swap: boolean }
@@ -395,4 +429,16 @@ export const api = {
   getGlossary: () => req<{ glossary: Record<string, string> }>('/reading/config/glossary'),
   saveGlossary: (g: Record<string, string>) =>
     req<{ ok: boolean; count: number }>('/reading/config/glossary', { method: 'POST', body: JSON.stringify({ glossary: g }) }),
+
+  // ---- 每日情报 (Daily Digest) ----
+  getTodayDigest: () => req<DigestResponse>('/digest/today'),
+  getArchiveDigest: (date: string) => req<DigestResponse>(`/digest/archive?date=${date}`),
+  refreshDigest: () => req<DigestResponse>('/digest/refresh', { method: 'POST' }),
+  actOnDigestItem: (id: string, action: 'ignore' | 'import') =>
+    req<{ ok: boolean }>(`/digest/${id}/action`, { method: 'POST', body: JSON.stringify({ action }) }),
+  importDigestPaper: (id: string) =>
+    req<{ ok: boolean; document: any }>(`/digest/${id}/import-paper`, { method: 'POST' }),
+  getDigestConfig: () => req<{ topics: string[]; scheduler_enabled: boolean }>('/digest/config'),
+  updateDigestConfig: (c: { topics: string[]; scheduler_enabled?: boolean }) =>
+    req<{ ok: boolean; topics: string[]; scheduler_enabled: boolean }>('/digest/config', { method: 'POST', body: JSON.stringify(c) }),
 }

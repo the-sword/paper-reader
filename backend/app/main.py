@@ -55,6 +55,9 @@ async def auth_middleware(request: Request, call_next):
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
+    from .services import digest
+
+    digest.start_scheduler()
 
 
 app.include_router(api_router, prefix="/api")

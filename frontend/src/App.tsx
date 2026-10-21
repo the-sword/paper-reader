@@ -5,6 +5,7 @@ import PdfViewer from './components/PdfViewer'
 import SettingsDialog from './components/SettingsDialog'
 import ArxivPanel from './components/ArxivPanel'
 import QueueIndicator from './components/QueueIndicator'
+import DailyDigestView from './components/DailyDigestView'
 import ReaderSettings, { DEFAULT_READER_PREFS, type ReaderPrefs } from './components/ReaderSettings'
 import RightPanel from './components/RightPanel'
 import Resizer from './components/Resizer'
@@ -38,6 +39,7 @@ export default function App() {
   const refreshSidebar = useStore((s) => s.refreshSidebar)
   const refreshLibrary = useStore((s) => s.refreshLibrary)
   const startParse = useStore((s) => s.startParse)
+  const mainView = useStore((s) => s.mainView)
   const setError = (msg: string) => useStore.setState({ error: msg })
 
   const [scale, setScale] = useState(1.0)
@@ -422,80 +424,86 @@ export default function App() {
           </>
         )}
 
-        {isMobile ? (
-          // 手机：文档列表抽屉浮层，不挤压阅读区；未打开文档时常开（即文库页）
-          (showList || !currentDoc) && (
-            <>
-              <div
-                style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 60 }}
-                onClick={() => { if (currentDoc) setShowList(false) }}
-              />
-              <div style={{
-                position: 'fixed', left: 0, top: 46, bottom: 0, zIndex: 61,
-                width: Math.min(340, Math.max(260, Math.round(vw * 0.85))),
-                boxShadow: '2px 0 16px rgba(0,0,0,.35)', display: 'flex',
-              }}>
-                <DocumentList width={Math.min(340, Math.max(260, Math.round(vw * 0.85)))} />
-              </div>
-            </>
-          )
+        {mainView === 'digest' ? (
+          <DailyDigestView />
         ) : (
           <>
-            <DocumentList width={wList} />
-            <Resizer side="left" min={240} max={520} onResize={(w) => { setWList(w); savePanelPrefs({ list: w }) }} />
-          </>
-        )}
-
-        <main
-          ref={mainRef}
-          style={{ flex: '1 1 0', minWidth: 0, overflow: 'auto', background: 'var(--bg-canvas)' }}
-        >
-          {!currentDoc ? (
-            <div className="hint" style={{ padding: 40, textAlign: 'center' }}>
-              {loading ? '加载中…' : '从左侧选择或导入一篇 PDF'}
-            </div>
-          ) : view === 'bilingual' ? (
-            bdReady[currentDoc.id] ? (
-              <PdfViewer
-                url={api.babelDocPdfUrl(currentDoc.id)}
-                scale={scale}
-                onBaseWidth={setBaseWidth}
-              />
+            {isMobile ? (
+              // 手机：文档列表抽屉浮层，不挤压阅读区；未打开文档时常开（即文库页）
+              (showList || !currentDoc) && (
+                <>
+                  <div
+                    style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 60 }}
+                    onClick={() => { if (currentDoc) setShowList(false) }}
+                  />
+                  <div style={{
+                    position: 'fixed', left: 0, top: 46, bottom: 0, zIndex: 61,
+                    width: Math.min(340, Math.max(260, Math.round(vw * 0.85))),
+                    boxShadow: '2px 0 16px rgba(0,0,0,.35)', display: 'flex',
+                  }}>
+                    <DocumentList width={Math.min(340, Math.max(260, Math.round(vw * 0.85)))} />
+                  </div>
+                </>
+              )
             ) : (
-              <div className="hint" style={{ padding: 40, textAlign: 'center' }}>
-                尚未生成双语 PDF，请点击顶栏「双语PDF」生成
-              </div>
-            )
-          ) : (
-            <PdfViewer
-              url={api.pdfUrl(currentDoc.id)}
-              scale={scale}
-              onBaseWidth={setBaseWidth}
-            />
-          )}
-        </main>
+              <>
+                <DocumentList width={wList} />
+                <Resizer side="left" min={240} max={520} onResize={(w) => { setWList(w); savePanelPrefs({ list: w }) }} />
+              </>
+            )}
 
-        {showNotes && !isMobile && (
-          <>
-            <Resizer side="right" min={240} max={520} onResize={(w) => { setWNotes(w); savePanelPrefs({ notes: w }) }} />
-            <RightPanel width={wNotes} />
-          </>
-        )}
+            <main
+              ref={mainRef}
+              style={{ flex: '1 1 0', minWidth: 0, overflow: 'auto', background: 'var(--bg-canvas)' }}
+            >
+              {!currentDoc ? (
+                <div className="hint" style={{ padding: 40, textAlign: 'center' }}>
+                  {loading ? '加载中…' : '从左侧选择或导入一篇 PDF'}
+                </div>
+              ) : view === 'bilingual' ? (
+                bdReady[currentDoc.id] ? (
+                  <PdfViewer
+                    url={api.babelDocPdfUrl(currentDoc.id)}
+                    scale={scale}
+                    onBaseWidth={setBaseWidth}
+                  />
+                ) : (
+                  <div className="hint" style={{ padding: 40, textAlign: 'center' }}>
+                    尚未生成双语 PDF，请点击顶栏「双语PDF」生成
+                  </div>
+                )
+              ) : (
+                <PdfViewer
+                  url={api.pdfUrl(currentDoc.id)}
+                  scale={scale}
+                  onBaseWidth={setBaseWidth}
+                />
+              )}
+            </main>
 
-        {/* 手机：笔记面板右侧抽屉，点顶栏 📝 开关 */}
-        {isMobile && showNotesDrawer && (
-          <>
-            <div
-              style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 60 }}
-              onClick={() => setShowNotesDrawer(false)}
-            />
-            <div style={{
-              position: 'fixed', right: 0, top: 46, bottom: 0, zIndex: 61,
-              width: Math.min(340, Math.max(260, Math.round(vw * 0.85))),
-              boxShadow: '-2px 0 16px rgba(0,0,0,.35)', display: 'flex',
-            }}>
-              <RightPanel width={Math.min(340, Math.max(260, Math.round(vw * 0.85)))} />
-            </div>
+            {showNotes && !isMobile && (
+              <>
+                <Resizer side="right" min={240} max={520} onResize={(w) => { setWNotes(w); savePanelPrefs({ notes: w }) }} />
+                <RightPanel width={wNotes} />
+              </>
+            )}
+
+            {/* 手机：笔记面板右侧抽屉，点顶栏 📝 开关 */}
+            {isMobile && showNotesDrawer && (
+              <>
+                <div
+                  style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 60 }}
+                  onClick={() => setShowNotesDrawer(false)}
+                />
+                <div style={{
+                  position: 'fixed', right: 0, top: 46, bottom: 0, zIndex: 61,
+                  width: Math.min(340, Math.max(260, Math.round(vw * 0.85))),
+                  boxShadow: '-2px 0 16px rgba(0,0,0,.35)', display: 'flex',
+                }}>
+                  <RightPanel width={Math.min(340, Math.max(260, Math.round(vw * 0.85)))} />
+                </div>
+              </>
+            )}
           </>
         )}
       </div>

@@ -11,6 +11,7 @@ from fastapi import APIRouter
 
 from .annotations import router as annotations_router
 from .arxiv import router as arxiv_router
+from .digest import router as digest_router
 from .documents import router as documents_router
 from .folders import router as folders_router
 from .parse import router as parse_router
@@ -27,3 +28,4 @@ api.include_router(annotations_router, prefix="/annotations", tags=["annotations
 api.include_router(parse_router, prefix="/reading", tags=["reading"])
 api.include_router(phase3_router, prefix="/reading", tags=["phase3"])
 api.include_router(arxiv_router, prefix="/arxiv", tags=["arxiv"])
+api.include_router(digest_router)

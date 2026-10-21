@@ -121,6 +121,39 @@ CREATE TABLE IF NOT EXISTS term_cache (
   payload    TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+-- 每日情报推荐条目表
+CREATE TABLE IF NOT EXISTS digest_items (
+  id        TEXT PRIMARY KEY,
+  source    TEXT NOT NULL,          -- 'arxiv' | 'github'
+  date      TEXT NOT NULL,          -- YYYY-MM-DD
+  title     TEXT NOT NULL,
+  url       TEXT NOT NULL,
+  summary   TEXT,
+  score     REAL DEFAULT 0.0,
+  meta      TEXT,                   -- JSON 附加字段 (authors, stars, star_growth, categories, lang 等)
+  status    TEXT DEFAULT 'new'      -- 'new' | 'imported' | 'ignored'
+);
+CREATE INDEX IF NOT EXISTS idx_digest_items_date ON digest_items(date);
+CREATE INDEX IF NOT EXISTS idx_digest_items_source ON digest_items(source);
+
+-- 每日情报去重与永久动作历史表 (仅留 ID 指纹，占用极小)
+CREATE TABLE IF NOT EXISTS digest_history (
+  id              TEXT PRIMARY KEY,  -- 归一化 ID: 'arxiv:2401.12345' 或 'github:owner/repo'
+  source          TEXT NOT NULL,
+  first_seen_date TEXT NOT NULL,
+  last_seen_date  TEXT NOT NULL,
+  user_action     TEXT DEFAULT 'new' -- 'new' | 'imported' | 'ignored'
+);
+CREATE INDEX IF NOT EXISTS idx_digest_history_action ON digest_history(user_action);
+
+-- GitHub Star 历史打点表 (计算过去24小时/7天日增速)
+CREATE TABLE IF NOT EXISTS github_stars (
+  full_name TEXT NOT NULL,
+  date      TEXT NOT NULL,
+  stars     INTEGER NOT NULL,
+  PRIMARY KEY (full_name, date)
+);
 """
 
 
@@ -187,3 +220,32 @@ def db() -> Iterator[sqlite3.Connection]:
         raise
     finally:
         conn.close()
+
+
+def cleanup_retention(days: int = 180) -> dict[str, int]:
+    """轻量清理策略：清理超过 180 天且未入库的推荐条目，保留防重指纹。"""
+    with db() as conn:
+        cur1 = conn.execute(
+            """
+            DELETE FROM digest_items
+            WHERE date < date('now', '-' || ? || ' days')
+              AND status != 'imported'
+            """,
+            (days,),
+        )
+        deleted_items = cur1.rowcount
+
+        cur2 = conn.execute(
+            """
+            DELETE FROM github_stars
+            WHERE date < date('now', '-' || ? || ' days')
+            """,
+            (days,),
+        )
+        deleted_stars = cur2.rowcount
+
+    return {
+        "deleted_items": max(0, deleted_items),
+        "deleted_stars": max(0, deleted_stars),
+    }
+

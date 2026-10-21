@@ -51,6 +51,8 @@ export default function Sidebar({ width = 260 }: { width?: number }) {
   const tags = useStore((s) => s.tags)
   const activeFolder = useStore((s) => s.activeFolder)
   const activeTag = useStore((s) => s.activeTag)
+  const mainView = useStore((s) => s.mainView)
+  const setMainView = useStore((s) => s.setMainView)
   const setFolder = useStore((s) => s.setFolder)
   const setTag = useStore((s) => s.setTag)
   const refreshSidebar = useStore((s) => s.refreshSidebar)
@@ -216,17 +218,44 @@ export default function Sidebar({ width = 260 }: { width?: number }) {
     <aside style={sidebarStyle}>
       <div
         style={{
-          ...itemStyle(activeFolder === null && activeTag === null),
+          ...itemStyle(mainView === 'reader' && activeFolder === null && activeTag === null),
           ...(dragTarget === 'all'
             ? { background: 'var(--bg-active)', outline: '2px dashed var(--accent)', outlineOffset: -2 }
             : {}),
         }}
-        onClick={() => { setFolder(null) }}
+        onClick={() => {
+          setMainView('reader')
+          setFolder(null)
+        }}
         {...dropProps(null)}
         data-drop-target="all"
         title="拖到此处可移出所有文件夹"
       >
         <Icon d={PATH_BOOK} /> 全部文献
+      </div>
+
+      <div
+        style={{
+          ...itemStyle(mainView === 'digest'),
+          marginTop: 4,
+        }}
+        onClick={() => setMainView('digest')}
+        title="每天 08:00 自动聚合前沿论文与热门开源代码"
+      >
+        <span>📡</span> 每日情报
+        <span
+          style={{
+            marginLeft: 'auto',
+            fontSize: 10,
+            fontWeight: 700,
+            background: 'linear-gradient(135deg, #f59e0b, #ef4444)',
+            color: '#fff',
+            borderRadius: 8,
+            padding: '1px 6px',
+          }}
+        >
+          NEW
+        </span>
       </div>
 
       <div style={sectionTitle}>
