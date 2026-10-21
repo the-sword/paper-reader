@@ -133,10 +133,17 @@ def _parse_entries(xml: str) -> list[ArxivItem]:
     return items
 
 
-def search(query: str, limit: int = 10, field: str = "all") -> list[dict[str, Any]]:
+def search(
+    query: str,
+    limit: int = 10,
+    field: str = "all",
+    sort_by: str = "relevance",
+    sort_order: str = "descending",
+) -> list[dict[str, Any]]:
     """按关键词搜索 arXiv。
 
     field: all | ti（标题） | au（作者） | abs（摘要）
+    sort_by: relevance | submittedDate | lastUpdatedDate
     """
     q = query.strip()
     if not q:
@@ -149,8 +156,8 @@ def search(query: str, limit: int = 10, field: str = "all") -> list[dict[str, An
     r = _get(ARXIV_API, {
         "search_query": search_query,
         "max_results": max(1, min(limit, 30)),
-        "sortBy": "relevance",
-        "sortOrder": "descending",
+        "sortBy": sort_by,
+        "sortOrder": sort_order,
     })
     if getattr(r, "status_code", 0) != 200:
         raise RuntimeError(f"arXiv 搜索失败：HTTP {getattr(r, 'status_code', '?')}")

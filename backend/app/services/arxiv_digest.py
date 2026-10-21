@@ -48,7 +48,14 @@ def search_arxiv_papers(topics: list[str], limit: int = 25) -> list[dict[str, An
     full_query = " OR ".join(query_parts)
 
     try:
-        raw_items = arxiv.search(full_query, limit=max(30, limit), field="all")
+        # 强制按提交时间倒序抓取真正最新的论文，避免被几年前的高引老论文霸榜
+        raw_items = arxiv.search(
+            full_query,
+            limit=max(30, limit),
+            field="all",
+            sort_by="submittedDate",
+            sort_order="descending",
+        )
     except Exception:
         return []
 

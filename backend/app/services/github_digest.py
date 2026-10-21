@@ -43,37 +43,50 @@ def search_github_repositories(topics: list[str], limit: int = 25) -> list[dict[
     raw_items: list[dict[str, Any]] = []
     seen_names: set[str] = set()
 
+    today_dt = datetime.now(timezone.utc)
+    today_str = today_dt.strftime("%Y-%m-%d")
+    from datetime import timedelta
+    # 严格的时间窗口：只关注近期 14 天有活跃提交，或最近 60 天内新建的黑马开源
+    recent_pushed = (today_dt - timedelta(days=14)).strftime("%Y-%m-%d")
+    recent_created = (today_dt - timedelta(days=60)).strftime("%Y-%m-%d")
+
     try:
-        # 对前 3 个主题分别查询，合并候选池 (GitHub 语法不支持括号 OR 组合)
+        # 对前 3 个主题分别查询：
+        # 1) 近期 60 天内刚刚创建的新星库
+        # 2) 近期 14 天内有活跃提交的热门库
         for t in topics[:3]:
             term = t.strip()
             if not term:
                 continue
-            query = f'"{term}" stars:>20' if " " in term else f"{term} stars:>20"
-            try:
-                resp = client.get(
-                    GITHUB_SEARCH_API,
-                    params={
-                        "q": query,
-                        "sort": "stars",
-                        "order": "desc",
-                        "per_page": min(15, limit),
-                    },
-                    headers=headers,
-                )
-                if resp.status_code == 200:
-                    for it in resp.json().get("items", []):
-                        fn = it.get("full_name", "").strip().lower()
-                        if fn and fn not in seen_names:
-                            seen_names.add(fn)
-                            raw_items.append(it)
-            except Exception:
-                continue
+            quoted_term = f'"{term}"' if " " in term else term
+
+            queries = [
+                f"{quoted_term} created:>{recent_created} stars:>5",
+                f"{quoted_term} pushed:>{recent_pushed} stars:>30",
+            ]
+
+            for q in queries:
+                try:
+                    resp = client.get(
+                        GITHUB_SEARCH_API,
+                        params={
+                            "q": q,
+                            "sort": "stars",
+                            "order": "desc",
+                            "per_page": min(10, limit),
+                        },
+                        headers=headers,
+                    )
+                    if resp.status_code == 200:
+                        for it in resp.json().get("items", []):
+                            fn = it.get("full_name", "").strip().lower()
+                            if fn and fn not in seen_names:
+                                seen_names.add(fn)
+                                raw_items.append(it)
+                except Exception:
+                    continue
     finally:
         client.close()
-
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    today_dt = datetime.now(timezone.utc)
 
     results: list[dict[str, Any]] = []
 
@@ -82,6 +95,16 @@ def search_github_repositories(topics: list[str], limit: int = 25) -> list[dict[
             full_name = item.get("full_name", "").strip()
             if not full_name:
                 continue
+
+            # 过滤：如果最后一次 push 超过 30 天，坚决剔除陈旧停更库
+            pushed_str = item.get("pushed_at") or ""
+            if pushed_str:
+                try:
+                    p_dt = datetime.fromisoformat(pushed_str.replace("Z", "+00:00"))
+                    if (today_dt - p_dt).days > 30:
+                        continue
+                except Exception:
+                    pass
 
             current_stars = item.get("stargazers_count", 0)
 
@@ -121,16 +144,28 @@ def search_github_repositories(topics: list[str], limit: int = 25) -> list[dict[
                     try:
                         c_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
                         age_days = max(1, (today_dt - c_dt).days)
-                        if age_days < 180:
+                        if age_days <= 60:
+                            # 60天内新建的项目，爆发力更强
                             growth_per_day = max(1, round(current_stars / age_days))
                         else:
-                            # 较老的成熟仓库，保守估算近期日增
-                            growth_per_day = max(0, round(current_stars / (age_days * 2)))
+                            growth_per_day = max(0, round(current_stars / age_days))
                     except Exception:
                         growth_per_day = 0
 
-            # 评分：主要以日增速为核心，兼顾总 star 权重
-            score = round(growth_per_day * 2.0 + min(100.0, current_stars / 40.0), 2)
+            # 评分加成：
+            # - 日增速权重
+            # - 新项目加成：如果是最近 60 天内创建的新项目，额外奖励 30 分
+            new_project_bonus = 0.0
+            created_str = item.get("created_at") or ""
+            if created_str:
+                try:
+                    c_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                    if (today_dt - c_dt).days <= 60:
+                        new_project_bonus = 30.0
+                except Exception:
+                    pass
+
+            score = round(growth_per_day * 2.5 + min(80.0, current_stars / 30.0) + new_project_bonus, 2)
 
             results.append({
                 "id": f"github:{full_name.lower()}",
@@ -145,6 +180,7 @@ def search_github_repositories(topics: list[str], limit: int = 25) -> list[dict[
                     "star_growth": growth_per_day,
                     "language": item.get("language") or "Other",
                     "updated_at": item.get("updated_at", ""),
+                    "pushed_at": item.get("pushed_at", ""),
                     "created_at": item.get("created_at", ""),
                 },
             })

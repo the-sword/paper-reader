@@ -533,14 +533,22 @@ export default function DailyDigestView() {
                         style={{
                           display: 'flex',
                           alignItems: 'center',
-                          gap: 12,
+                          flexWrap: 'wrap',
+                          gap: 10,
                           fontSize: 11,
                           color: 'var(--fg-muted)',
                         }}
                       >
-                        <span>{lang}</span>
+                        <span style={{ fontWeight: 600, color: 'var(--fg)' }}>{lang}</span>
                         <span>⭐ {stars.toLocaleString()}</span>
-                        {item.meta.forks !== undefined && <span>🍴 {item.meta.forks}</span>}
+                        {item.meta.pushed_at && (
+                          <span style={{ color: '#059669' }}>
+                            提交: {item.meta.pushed_at.slice(0, 10)}
+                          </span>
+                        )}
+                        {item.meta.created_at && (
+                          <span>创建: {item.meta.created_at.slice(0, 10)}</span>
+                        )}
 
                         <a
                           href={item.url}
