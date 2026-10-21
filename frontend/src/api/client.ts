@@ -150,6 +150,7 @@ export interface DigestItem {
     language?: string
     updated_at?: string
     created_at?: string
+    pushed_at?: string
   }
   status: 'new' | 'imported' | 'ignored'
 }
