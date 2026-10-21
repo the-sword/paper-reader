@@ -274,9 +274,18 @@ build_frontend() {
     env_args+=("VITE_AUTH_TOKEN=$AUTH_TOKEN")
     info "已将访问口令注入前端构建产物"
   fi
-  (cd "$ROOT/frontend" && env "${env_args[@]}" npm run build >/dev/null) || die "前端构建失败"
-  [ -f "$dist/index.html" ] || die "构建产物缺失: dist/index.html"
-  ok "前端构建完成 ($(du -sh "$dist" | cut -f1))"
+  # 限制 Node 进程内存，避免 2C2G VPS 编译时被 Linux OOM 杀掉
+  env_args+=("NODE_OPTIONS=--max-old-space-size=1024")
+
+  local build_log="/tmp/pr-frontend-build.log"
+  if (cd "$ROOT/frontend" && env "${env_args[@]}" npm run build > "$build_log" 2>&1); then
+    [ -f "$dist/index.html" ] || die "构建产物缺失: dist/index.html"
+    ok "前端构建完成 ($(du -sh "$dist" | cut -f1))"
+  else
+    warn "前端构建失败！最后 20 行日志如下:"
+    tail -n 20 "$build_log" 2>/dev/null || true
+    die "前端构建未能成功，请根据上方错误日志排查"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -544,11 +553,13 @@ EOF
     if [ "$TOKEN_GIVEN" = "1" ] && [ "$DO_BUILD" != "1" ]; then
       warn "--no-build 不重建前端：新口令只写入后端，页面可能仍用旧口令"
     fi
+    # 关键：低配 VPS（如 2C2G）必须在安装依赖与构建前端之前先建好 Swap！
+    # 否则 npm run build (tsc -b + rollup) 容易因物理内存耗尽直接被 Linux 内核 OOM kill。
+    setup_swap
     setup_python
     check_system_python
     resolve_py_bin
     build_frontend
-    setup_swap
     check_babeldoc_assets
     setup_data
     install_service
