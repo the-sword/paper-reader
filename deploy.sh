@@ -302,12 +302,20 @@ setup_swap() {
     return 0
   fi
   if [ "$(swapon --show 2>/dev/null | wc -l)" -gt 0 ]; then
-    ok "已有 swap: $(free -h | awk '/Swap/ {print $2}')"
+    ok "已有 swap 生效: $(free -h | awk '/Swap/ {print $2}')"
     return 0
   fi
 
   local swapfile="/swapfile"
-  warn "内存 ${total_mb}MB 偏小且无 swap，尝试创建 2G swap（需 sudo）"
+  # 如果已有现成文件，直接激活复用，不重复落盘
+  if [ -f "$swapfile" ]; then
+    if sudo -n swapon "$swapfile" 2>/dev/null; then
+      ok "已激活已有 swap 文件: $swapfile"
+      return 0
+    fi
+  fi
+
+  warn "内存 ${total_mb}MB 偏小且无生效 swap，尝试创建 2G swap（需 sudo）"
   if sudo -n fallocate -l 2G "$swapfile" 2>/dev/null \
      && sudo -n chmod 600 "$swapfile" 2>/dev/null \
      && sudo -n mkswap "$swapfile" >/dev/null 2>&1 \
