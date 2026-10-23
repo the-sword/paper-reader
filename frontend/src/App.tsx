@@ -6,6 +6,7 @@ import SettingsDialog from './components/SettingsDialog'
 import ArxivPanel from './components/ArxivPanel'
 import QueueIndicator from './components/QueueIndicator'
 import DailyDigestView from './components/DailyDigestView'
+import RadarView from './components/RadarView'
 import ReaderSettings, { DEFAULT_READER_PREFS, type ReaderPrefs } from './components/ReaderSettings'
 import RightPanel from './components/RightPanel'
 import Resizer from './components/Resizer'
@@ -426,6 +427,8 @@ export default function App() {
 
         {mainView === 'digest' ? (
           <DailyDigestView />
+        ) : mainView === 'radar' ? (
+          <RadarView />
         ) : (
           <>
             {isMobile ? (

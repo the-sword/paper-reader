@@ -16,6 +16,7 @@ from .documents import router as documents_router
 from .folders import router as folders_router
 from .parse import router as parse_router
 from .phase3 import router as phase3_router
+from .radar import router as radar_router
 from .system import router as system_router
 from .tags import router as tags_router
 
@@ -29,3 +30,4 @@ api.include_router(parse_router, prefix="/reading", tags=["reading"])
 api.include_router(phase3_router, prefix="/reading", tags=["phase3"])
 api.include_router(arxiv_router, prefix="/arxiv", tags=["arxiv"])
 api.include_router(digest_router)
+api.include_router(radar_router)

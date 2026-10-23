@@ -154,6 +154,53 @@ CREATE TABLE IF NOT EXISTS github_stars (
   stars     INTEGER NOT NULL,
   PRIMARY KEY (full_name, date)
 );
+
+-- ===== Paper-Code Radar（docs/radar_srs.md §4.1）=====
+
+-- Topic 配置（冗余落库便于归档回溯；运行时真源为 settings 表 radar.topics JSON）
+CREATE TABLE IF NOT EXISTS radar_topics (
+  id         TEXT PRIMARY KEY,       -- topic id（如 embodied_perception）
+  name       TEXT NOT NULL,
+  config     TEXT NOT NULL,          -- JSON：完整 Topic 定义
+  updated_at TEXT NOT NULL
+);
+
+-- 论文条目（含评审结果；同一论文命中多 Topic 时按 (id, topic_id) 存多行）
+CREATE TABLE IF NOT EXISTS radar_papers (
+  id            TEXT NOT NULL,       -- arxiv:<id>（去版本号）
+  topic_id      TEXT NOT NULL,
+  title         TEXT NOT NULL,
+  authors       TEXT,                -- JSON array
+  abstract      TEXT,
+  categories    TEXT,                -- JSON array
+  published     TEXT,                -- 完整 ISO 时间戳（HH:MM 保留，用于 24h 窗口）
+  code_status   TEXT DEFAULT 'no_code',   -- code_available|placeholder|no_code
+  repo_url      TEXT,
+  review_status TEXT DEFAULT 'pending',   -- pending|reviewed|review_failed|skipped
+  review        TEXT,                -- JSON：LLM 评审卡片
+  score         REAL,                -- 冗余 relevance_score，便于排序
+  archived      INTEGER DEFAULT 0,   -- 已写入每日归档标记
+  first_seen    TEXT NOT NULL,
+  PRIMARY KEY (id, topic_id)
+);
+CREATE INDEX IF NOT EXISTS idx_radar_papers_date ON radar_papers(first_seen);
+CREATE INDEX IF NOT EXISTS idx_radar_papers_topic ON radar_papers(topic_id, score);
+
+-- GitHub 仓库审计缓存（7 天内不重复请求 API）
+CREATE TABLE IF NOT EXISTS radar_repos (
+  full_name  TEXT PRIMARY KEY,       -- owner/repo（小写）
+  is_valid   INTEGER,
+  is_empty   INTEGER,
+  stars      INTEGER,
+  language   TEXT,
+  pushed_at  TEXT,
+  checked_at TEXT NOT NULL
+);
+
+-- FTS5 全文索引（external content 模式，跟随 radar_papers 同步）
+CREATE VIRTUAL TABLE IF NOT EXISTS radar_fts USING fts5(
+  paper_id UNINDEXED, title, abstract, summary_zh, innovation_zh
+);
 """
 
 

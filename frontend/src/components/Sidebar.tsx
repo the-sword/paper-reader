@@ -258,6 +258,16 @@ export default function Sidebar({ width = 260 }: { width?: number }) {
         </span>
       </div>
 
+      <div
+        style={{
+          ...itemStyle(mainView === 'radar'),
+        }}
+        onClick={() => setMainView('radar')}
+        title="多主题 arXiv 订阅 + 代码活性审计 + LLM 评审"
+      >
+        <span>🛰</span> 情报雷达
+      </div>
+
       <div style={sectionTitle}>
         文件夹
         <span

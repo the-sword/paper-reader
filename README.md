@@ -60,6 +60,7 @@ paper-reader/
 |---|---|
 | PDF 导入 | 拖拽或选择，sha256 内容寻址**自动去重** |
 | **arXiv 添加** | 关键词搜索 / DOI 反查 Crossref → 匹配 arXiv → 一键下载导入 |
+| **每日情报雷达** | 多主题 Paper-Code Radar：arXiv 分类订阅 + 论文配套代码活性审计（空仓/Star/语言）+ LLM 结构化评审打分，产出为站内看板 + 每日 Markdown 归档（v1 已上线基础版，v2 需求见 [docs/radar_srs.md](docs/radar_srs.md)） |
 | 文件夹树 | 多层级，一篇文献可归属多个文件夹 |
 | 标签 | 与文件夹独立的第二维度 |
 | **拖拽归档** | 普通拖放 = 移动；按住 Alt = 追加到多个文件夹 |

@@ -162,6 +162,73 @@ export interface DigestResponse {
   cached?: boolean
 }
 
+// ---- Paper-Code Radar ----
+export interface RadarTopic {
+  id: string
+  name: string
+  categories: string[]
+  keywords: string[]
+  evaluation_focus: string
+  min_score_to_show: number
+}
+
+export interface RadarReview {
+  relevance_score?: number
+  primary_tag?: string
+  one_sentence_summary?: string
+  problem_solved?: string
+  core_innovation?: string
+  practical_value?: string
+  pass_filter?: boolean
+  repo_stars?: number
+}
+
+export interface RadarPaper {
+  id: string
+  topic_id: string
+  title: string
+  authors: string[]
+  abstract: string
+  categories: string[]
+  published: string
+  code_status: 'code_available' | 'placeholder' | 'no_code'
+  repo_url: string
+  repo_stars: number
+  review_status: 'pending' | 'reviewed' | 'review_failed' | 'skipped'
+  review: RadarReview
+  score: number | null
+  first_seen: string
+}
+
+export interface RadarDayResponse {
+  date: string
+  topics: Record<string, RadarPaper[]>
+  total: number
+}
+
+export interface RadarConfigResponse {
+  topics: RadarTopic[]
+  scheduler_enabled: boolean
+}
+
+export interface RadarSearchResponse {
+  total: number
+  items: RadarPaper[]
+}
+
+export interface RadarStats {
+  topics: Array<{ topic_id: string; name: string; total: number; avg_score: number; with_code: number }>
+  llm_usage: Record<string, { calls: number; token_in: number; token_out: number }>
+}
+
+export interface RadarRefreshResponse {
+  date: string
+  cached: boolean
+  topics: Record<string, { name: string; stage1: number; reviewed: number; shown: number; failed: number }>
+  archive?: string
+  message?: string
+}
+
 export interface SelfCheckResult {
   cpu: { cores: number; baseline_s: number; level: string; desc: string }
   memory: { total_mb: number; available_mb: number; swap_mb: number; level: string; has_swap: boolean }
@@ -442,4 +509,38 @@ export const api = {
   getDigestConfig: () => req<{ topics: string[]; scheduler_enabled: boolean }>('/digest/config'),
   updateDigestConfig: (c: { topics: string[]; scheduler_enabled?: boolean }) =>
     req<{ ok: boolean; topics: string[]; scheduler_enabled: boolean }>('/digest/config', { method: 'POST', body: JSON.stringify(c) }),
+
+  // ---- 情报雷达 (Paper-Code Radar) ----
+  radarToday: () => req<RadarDayResponse>('/radar/today'),
+  radarRefresh: () => req<RadarRefreshResponse>('/radar/refresh', { method: 'POST' }),
+  radarArchive: (date: string) => req<RadarDayResponse>(`/radar/archive?date=${date}`),
+  radarSearch: (p: { q?: string; topic_id?: string; code_status?: string; min_score?: number; date_from?: string; date_to?: string; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (p.q) qs.set('q', p.q)
+    if (p.topic_id) qs.set('topic_id', p.topic_id)
+    if (p.code_status) qs.set('code_status', p.code_status)
+    if (p.min_score) qs.set('min_score', String(p.min_score))
+    if (p.date_from) qs.set('date_from', p.date_from)
+    if (p.date_to) qs.set('date_to', p.date_to)
+    if (p.limit) qs.set('limit', String(p.limit))
+    return req<RadarSearchResponse>(`/radar/search?${qs}`)
+  },
+  radarGetConfig: () => req<RadarConfigResponse>('/radar/config'),
+  radarSaveConfig: (c: { topics: RadarTopic[]; scheduler_enabled?: boolean }) =>
+    req<{ ok: boolean; topics: RadarTopic[]; scheduler_enabled: boolean }>('/radar/config',
+      { method: 'POST', body: JSON.stringify(c) }),
+  radarImportYaml: (text: string) =>
+    req<{ ok: boolean; imported: number; rejected: number; total: number; topics: RadarTopic[] }>(
+      '/radar/config/import', { method: 'POST', body: JSON.stringify({ text }) }),
+  radarExportYaml: () => req<string>('/radar/config/export'),
+  radarActOnPaper: (id: string, action: 'ignore' | 'import') =>
+    req<{ ok: boolean }>(`/radar/${id}/action`, { method: 'POST', body: JSON.stringify({ action }) }),
+  radarImportPaper: (id: string) =>
+    req<{ ok: boolean; document: any }>(`/radar/${id}/import-paper`, { method: 'POST' }),
+  radarBibtex: async (id: string) => {
+    const res = await fetch(`/api/radar/${id}/bibtex${AUTH_TOKEN ? `?token=${AUTH_TOKEN}` : ''}`)
+    if (!res.ok) throw new Error(`BibTeX 生成失败 (HTTP ${res.status})`)
+    return res.text()
+  },
+  radarStats: () => req<RadarStats>('/radar/stats'),
 }

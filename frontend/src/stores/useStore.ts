@@ -16,7 +16,7 @@ interface State {
   search: string
   loading: boolean
   error: string | null
-  mainView: 'reader' | 'digest'
+  mainView: 'reader' | 'digest' | 'radar'
 
   // 阅读
   segments: Segment[]
@@ -36,7 +36,7 @@ interface State {
   setFolder: (id: string | null) => void
   setTag: (id: string | null) => void
   setSearch: (q: string) => void
-  setMainView: (v: 'reader' | 'digest') => void
+  setMainView: (v: 'reader' | 'digest' | 'radar') => void
   refreshAnnotations: (docId: string) => Promise<void>
   addAnnotation: (docId: string, page: number, rects: number[][], quote: string, color: string,
                   opts?: { segmentId?: string; side?: string; kind?: string
