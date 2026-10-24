@@ -92,10 +92,13 @@ def _load_yaml(text: str) -> dict[str, Any]:
 def _parse_simple_yaml(text: str) -> dict[str, Any]:
     """内置极简 YAML 解析器：仅覆盖本模块导出格式（topics 列表 + 标量/字符串数组）。
 
+    支持 flow 风格（keywords: ["a", "b"]）与块风格（keywords: 换行 - a）；
+    块数组项靠「缩进深于所属 topic 条目」识别，不会误判为新 Topic。
     依赖项说明：PyYAML 非 requirements 必选依赖，这里保证零依赖也能导入/导出。
     """
     topics: list[dict[str, Any]] = []
     cur: dict[str, Any] | None = None
+    cur_indent = 0          # 当前 topic 条目（"- " 行）的缩进
     pending_key = ""
     pending_val: list[str] = []
 
@@ -118,8 +121,13 @@ def _parse_simple_yaml(text: str) -> dict[str, Any]:
             cur = None
             continue
         if line.startswith("- "):
+            if cur is not None and pending_key and indent > cur_indent:
+                # 块数组项（如 keywords: 下的 "- item"），不是新 Topic
+                pending_val.append(line[2:].strip().strip('"\''))
+                continue
             flush_list()
             cur = {}
+            cur_indent = indent
             topics.append(cur)
             line = line[2:].strip()
             if not line:

@@ -267,6 +267,10 @@ async def translate_pdf_async(
     import os as _os
     from pathlib import Path as _Path
 
+    from .library import is_valid_doc_id
+    if not is_valid_doc_id(doc_id):
+        raise RuntimeError("非法的文档 id")
+
     ok, reason = is_available()
     if not ok:
         raise RuntimeError(reason)
@@ -425,6 +429,9 @@ async def translate_pdf_async(
 
 def get_babeldoc_pdf(doc_id: str) -> dict[str, str] | None:
     """返回该文档已生成的双语 PDF 路径（若无则 None）。"""
+    from .library import is_valid_doc_id
+    if not is_valid_doc_id(doc_id):
+        return None
     s = get_settings()
     d = s.parsed_dir / doc_id / "babeldoc"
     if not d.exists():

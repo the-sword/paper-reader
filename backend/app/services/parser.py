@@ -421,7 +421,8 @@ def finalize_mineru(doc_id: str, task_id: str) -> int:
     img_dir = s.parsed_dir / doc_id / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
     for name, data in result.images.items():
-        (img_dir / name).write_bytes(data)
+        # 图片名来自云端解析结果（受上传 PDF 内容影响），只取 basename 防穿越
+        (img_dir / Path(name).name).write_bytes(data)
 
     # 存原始 markdown 备查
     (s.parsed_dir / doc_id / "full.md").write_text(result.full_md, encoding="utf-8")

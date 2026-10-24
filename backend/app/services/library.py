@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import sqlite3
 import uuid
@@ -11,6 +12,16 @@ from typing import Any
 
 from ..core.config import get_settings
 from ..core.db import db
+
+# doc_id 一律为 uuid4。任何用 doc_id 拼接文件路径的入口必须先过此校验，
+# 防止 "../" 之类输入越出 parsed_dir 读写任意文件。
+_DOC_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
+
+
+def is_valid_doc_id(doc_id: str) -> bool:
+    return bool(_DOC_ID_RE.match(doc_id or ""))
 
 
 def _now() -> str:

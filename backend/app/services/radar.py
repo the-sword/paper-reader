@@ -125,8 +125,54 @@ def _insert_paper(conn: Any, paper: dict[str, Any], topic: dict[str, Any],
     )
 
 
+def _commit_paper(paper: dict[str, Any], topic: dict[str, Any], code_status: str,
+                  repo_url: str, review: dict[str, Any] | None, status: str,
+                  date_str: str) -> None:
+    """单篇落库（短事务）：radar_papers + FTS 索引 + digest_history。
+
+    必须在所有网络调用（GitHub 审计 / LLM 评审）完成之后调用，
+    事务里不做任何 IO，避免长时间持有 SQLite 写锁把并发写饿死。
+    """
+    pid = _paper_key(paper["arxiv_id"])
+    with db() as conn:
+        _insert_paper(conn, paper, topic, code_status, repo_url, review, status)
+        # 同步全文索引（先删后插实现 upsert；同一论文多 Topic 共享一份索引）
+        conn.execute("DELETE FROM radar_fts WHERE paper_id=?", (pid,))
+        conn.execute(
+            "INSERT INTO radar_fts (paper_id, title, abstract, summary_zh, innovation_zh)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (pid, paper.get("title", ""), paper.get("abstract", ""),
+             (review or {}).get("one_sentence_summary", ""),
+             (review or {}).get("core_innovation", "")),
+        )
+        if status == "reviewed":
+            # 写入防重历史（14 天内不再重复评审）
+            conn.execute(
+                "INSERT INTO digest_history (id, source, first_seen_date,"
+                " last_seen_date, user_action) VALUES (?, 'arxiv', ?, ?, 'new') "
+                "ON CONFLICT(id) DO UPDATE SET last_seen_date=excluded.last_seen_date",
+                (pid, date_str, date_str),
+            )
+
+
+class PipelineBusyError(RuntimeError):
+    """同一时刻仅允许一轮管道（手动刷新与定时调度互斥）。"""
+
+
+_PIPELINE_LOCK = threading.Lock()
+
+
 def run_pipeline(target_date: str | None = None, force: bool = False) -> dict[str, Any]:
-    """执行一轮完整管道。返回各 Topic 的入选统计。"""
+    """执行一轮完整管道。同一时刻仅允许一轮：手动刷新与定时调度互斥。"""
+    if not _PIPELINE_LOCK.acquire(blocking=False):
+        raise PipelineBusyError("已有管道在运行中，请稍后再试")
+    try:
+        return _run_pipeline_locked(target_date, force)
+    finally:
+        _PIPELINE_LOCK.release()
+
+
+def _run_pipeline_locked(target_date: str | None = None, force: bool = False) -> dict[str, Any]:
     now = _now()
     date_str = target_date or _today_bj()
 
@@ -160,55 +206,47 @@ def run_pipeline(target_date: str | None = None, force: bool = False) -> dict[st
     review_total = [0]
     stats: dict[str, Any] = {}
 
-    with db() as conn:
-        for topic in topics:
-            stage1 = []
-            for p in papers:
-                pid = _paper_key(p["arxiv_id"])
-                if _is_blocked(pid, history, now):
-                    continue
-                # 本地文献库已有（标题/DOI 命中）则跳过
-                norm_title = re.sub(r"\W+", "", p.get("title", "").lower())
-                doi = (p.get("doi") or "").strip().lower()
-                if (doi and doi in local_sigs) or (len(norm_title) > 6 and norm_title in local_sigs):
-                    continue
-                if _stage1_filter(p, topic):
-                    stage1.append(p)
+    for topic in topics:
+        stage1 = []
+        for p in papers:
+            pid = _paper_key(p["arxiv_id"])
+            if _is_blocked(pid, history, now):
+                continue
+            # 本地文献库已有（标题/DOI 命中）则跳过
+            norm_title = re.sub(r"\W+", "", p.get("title", "").lower())
+            doi = (p.get("doi") or "").strip().lower()
+            if (doi and doi in local_sigs) or (len(norm_title) > 6 and norm_title in local_sigs):
+                continue
+            if _stage1_filter(p, topic):
+                stage1.append(p)
 
-            reviewed = shown = failed = 0
-            for p in stage1:
-                if reviewed >= MAX_REVIEW_PER_TOPIC or review_total[0] >= MAX_REVIEW_TOTAL:
-                    break
-                reviewed += 1
-                review_total[0] += 1
-                pid = _paper_key(p["arxiv_id"])
+        reviewed = shown = failed = 0
+        for p in stage1:
+            if reviewed >= MAX_REVIEW_PER_TOPIC or review_total[0] >= MAX_REVIEW_TOTAL:
+                break
+            reviewed += 1
+            review_total[0] += 1
+            pid = _paper_key(p["arxiv_id"])
 
-                code_status, repo_url, repo_info = radar_github.code_status_for(p, audits_used)
-                if repo_info:
-                    p = {**p, "stars": repo_info.get("stars") or 0}
-                try:
-                    review = radar_review.review_paper({**p, "code_status": code_status}, topic)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("评审失败 %s(%s): %s", pid, topic["id"], e)
-                    _insert_paper(conn, p, topic, code_status, repo_url, None, "review_failed")
-                    failed += 1
-                    continue
+            code_status, repo_url, repo_info = radar_github.code_status_for(p, audits_used)
+            if repo_info:
+                p = {**p, "stars": repo_info.get("stars") or 0}
+            try:
+                review = radar_review.review_paper({**p, "code_status": code_status}, topic)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("评审失败 %s(%s): %s", pid, topic["id"], e)
+                _commit_paper(p, topic, code_status, repo_url, None, "review_failed", date_str)
+                failed += 1
+                continue
 
-                # Star 数随评审卡片一起落库，供卡片与归档展示
-                if repo_info:
-                    review = {**review, "repo_stars": repo_info.get("stars") or 0}
-                _insert_paper(conn, p, topic, code_status, repo_url, review, "reviewed")
-                # 写入防重历史（14 天内不再重复评审）
-                conn.execute(
-                    "INSERT INTO digest_history (id, source, first_seen_date,"
-                    " last_seen_date, user_action) VALUES (?, 'arxiv', ?, ?, 'new') "
-                    "ON CONFLICT(id) DO UPDATE SET last_seen_date=excluded.last_seen_date",
-                    (pid, date_str, date_str),
-                )
-                if _is_selected(review["relevance_score"], topic["min_score_to_show"], code_status):
-                    shown += 1
-            stats[topic["id"]] = {"name": topic["name"], "stage1": len(stage1),
-                                  "reviewed": reviewed, "shown": shown, "failed": failed}
+            # Star 数随评审卡片一起落库，供卡片与归档展示
+            if repo_info:
+                review = {**review, "repo_stars": repo_info.get("stars") or 0}
+            _commit_paper(p, topic, code_status, repo_url, review, "reviewed", date_str)
+            if _is_selected(review["relevance_score"], topic["min_score_to_show"], code_status):
+                shown += 1
+        stats[topic["id"]] = {"name": topic["name"], "stage1": len(stage1),
+                              "reviewed": reviewed, "shown": shown, "failed": failed}
 
     # 2. 每日 Markdown 归档（对本日全部入选条目重新生成，幂等）
     archived_path = write_daily_archive(date_str)
@@ -489,24 +527,41 @@ _SCHED_THREAD: threading.Thread | None = None
 _SCHED_STOP = threading.Event()
 
 
+def _next_bj_8_delay(now: datetime) -> float:
+    """距下一个北京时间 08:00 的秒数。"""
+    bj = now + timedelta(hours=BJ_OFFSET_HOURS)
+    target = bj.replace(hour=8, minute=0, second=0, microsecond=0)
+    if bj >= target:
+        target += timedelta(days=1)
+    return (target - bj).total_seconds()
+
+
 def _scheduler_loop() -> None:
-    """每日 08:00（北京）触发一轮管道，与 digest v1 调度相互独立。"""
+    """每日 08:00（北京）触发当日管道；检查时已过 08:00 且当日未跑则立即补跑。
+
+    触发时刻靠「睡到点」保证（误差 < 30s）；平时单次至多睡 10 分钟，
+    及时响应调度开关变化。补跑语义与旧 30s 轮询一致，并非新增行为。
+    """
     while not _SCHED_STOP.is_set():
         try:
             if radar_topics.is_scheduler_enabled():
-                bj_hour = (_now().hour + BJ_OFFSET_HOURS) % 24
-                if bj_hour >= 8:
-                    today = _today_bj()
-                    if not _has_run(today):
-                        logger.info("雷达调度器触发：开始 %s 管道", today)
-                        run_pipeline(target_date=today, force=False)
-                        _mark_run(today)
+                now = _now()
+                bj = now + timedelta(hours=BJ_OFFSET_HOURS)
+                today = bj.strftime("%Y-%m-%d")
+                if bj.hour >= 8 and not _has_run(today):
+                    logger.info("雷达调度器触发：开始 %s 管道", today)
+                    run_pipeline(target_date=today, force=False)
+                    _mark_run(today)
         except Exception as e:  # noqa: BLE001
             logger.warning("雷达调度器异常: %s", e)
-        for _ in range(20):
-            if _SCHED_STOP.is_set():
+        # 单次至多睡 10 分钟（及时响应开关变化）；临近 08:00 时精确睡到点
+        delay = min(_next_bj_8_delay(_now()), 600.0)
+        deadline = time.monotonic() + delay
+        while not _SCHED_STOP.is_set():
+            remain = deadline - time.monotonic()
+            if remain <= 0:
                 break
-            time.sleep(30)
+            time.sleep(min(30, remain))
 
 
 def _has_run(date_str: str) -> bool:
@@ -526,7 +581,40 @@ def _mark_run(date_str: str) -> None:
         )
 
 
+def _backfill_fts() -> None:
+    """把历史评审行补进 radar_fts（幂等）。
+
+    FTS 同步是后来才加的：存量 radar_papers 行没有索引，检索时永远搜不到。
+    先删后插的 upsert 语义与 _commit_paper 一致，重跑无副作用。
+    """
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, title, abstract, review FROM radar_papers"
+        ).fetchall()
+        for r in rows:
+            review: dict[str, Any] = {}
+            if r["review"]:
+                try:
+                    review = json.loads(r["review"])
+                except Exception:  # noqa: BLE001
+                    review = {}
+            conn.execute("DELETE FROM radar_fts WHERE paper_id=?", (r["id"],))
+            conn.execute(
+                "INSERT INTO radar_fts (paper_id, title, abstract, summary_zh, innovation_zh)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (r["id"], r["title"], r["abstract"] or "",
+                 review.get("one_sentence_summary", ""),
+                 review.get("core_innovation", "")),
+            )
+    if rows:
+        logger.info("radar_fts 回填完成：%s 行", len(rows))
+
+
 def start_scheduler() -> None:
+    try:
+        _backfill_fts()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("radar_fts 回填失败（不影响启动）: %s", e)
     global _SCHED_THREAD
     if _SCHED_THREAD is None or not _SCHED_THREAD.is_alive():
         _SCHED_STOP.clear()

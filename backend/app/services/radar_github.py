@@ -37,8 +37,6 @@ _EXCLUDE_OWNERS = {
 
 # 审计结果缓存有效期
 CACHE_DAYS = 7
-# 审计异常结果的重试间隔（更短，尽快纠正）
-ERROR_RETRY_HOURS = 24
 # 无 token 时 GitHub API 限流 60 次/小时，单轮管道给其余请求留余量
 _MAX_AUDITS_PER_RUN = 40
 
@@ -135,9 +133,7 @@ def audit_repo(full_name: str, audits_used: list[int] | None = None) -> dict[str
     if row:
         try:
             checked = datetime.fromisoformat(row["checked_at"])
-            is_error_row = row["is_valid"] is None
-            max_age = timedelta(hours=ERROR_RETRY_HOURS) if is_error_row else timedelta(days=CACHE_DAYS)
-            if now - checked < max_age:
+            if now - checked < timedelta(days=CACHE_DAYS):
                 return _row_to_result(row)
         except (ValueError, TypeError):
             pass
@@ -152,17 +148,21 @@ def audit_repo(full_name: str, audits_used: list[int] | None = None) -> dict[str
     if result is None:
         return None
 
-    with db() as conn:
-        conn.execute(
-            "INSERT INTO radar_repos (full_name, is_valid, is_empty, stars, language,"
-            " pushed_at, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(full_name) DO UPDATE SET is_valid=excluded.is_valid,"
-            " is_empty=excluded.is_empty, stars=excluded.stars,"
-            " language=excluded.language, pushed_at=excluded.pushed_at,"
-            " checked_at=excluded.checked_at",
-            (full_name, result["is_valid"], result["is_empty"], result["stars"],
-             result["language"], result["pushed_at"], _now_iso()),
-        )
+    try:
+        with db() as conn:
+            conn.execute(
+                "INSERT INTO radar_repos (full_name, is_valid, is_empty, stars, language,"
+                " pushed_at, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(full_name) DO UPDATE SET is_valid=excluded.is_valid,"
+                " is_empty=excluded.is_empty, stars=excluded.stars,"
+                " language=excluded.language, pushed_at=excluded.pushed_at,"
+                " checked_at=excluded.checked_at",
+                (full_name, result["is_valid"], result["is_empty"], result["stars"],
+                 result["language"], result["pushed_at"], _now_iso()),
+            )
+    except Exception as e:  # noqa: BLE001
+        # 缓存写失败不影响本轮结论（如极端并发下的写锁竞争）
+        logger.warning("审计缓存写入失败 %s: %s", full_name, e)
     return {**result, "cached": False}
 
 
@@ -200,13 +200,18 @@ def _fetch_repo(full_name: str, token: str) -> dict[str, Any] | None:
         "pushed_at": data.get("pushed_at") or "",
     }
 
-    # 空仓判定：default branch 是否存在 commit（409 = 空仓库）
+    # 空仓判定：default branch 无 commit（GitHub 对空仓库返回 409）。
+    # 其余非 200 / 网络异常都无法判定，返回 None 本轮跳过——
+    # 否则一次瞬时抖动会被误判为「空仓」并污染 7 天缓存。
     try:
         with make_client(COMMITS_API, timeout=15) as client:
             cr = client.get(COMMITS_API.format(full_name=full_name), headers=headers)
-        result["is_empty"] = cr.status_code != 200
     except Exception:  # noqa: BLE001
+        return None
+    if cr.status_code == 409:
         result["is_empty"] = True
+    elif cr.status_code != 200:
+        return None
     return result
 
 

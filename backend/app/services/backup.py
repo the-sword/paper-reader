@@ -341,8 +341,25 @@ def restore(password: str | None = None) -> dict[str, Any]:
             # 安全：拒绝绝对路径和 .. 穿越
             if member.name.startswith("/") or ".." in Path(member.name).parts:
                 continue
-            tar.extract(member, path=s.lib_root)
+            # 拒绝符号链接/硬链接/设备成员：恶意归档可先放一个指向
+            # lib_root 之外的链接成员，再经该链接把文件写出数据目录
+            # （自产备份只含普通文件，跳过链接不影响正常恢复）
+            if member.issym() or member.islnk() or member.isdev():
+                continue
+            try:
+                # Python 3.12+（及旧版安全补丁）自带 data 过滤器，
+                # 再兜一层目录穿越/权限剥离；无该参数的旧版本走上面的手动检查
+                tar.extract(member, path=s.lib_root, filter="data")
+            except TypeError:
+                tar.extract(member, path=s.lib_root)
             if member.isfile():
                 extracted += 1
 
-    return {"ok": True, "restored_files": extracted}
+    # 清掉旧库的 WAL/SHM 残留：它们属于被覆盖前的旧库文件，
+    # 留着会被 SQLite 套用到恢复后的新库上，导致数据错乱/损坏
+    for suffix in ("-wal", "-shm"):
+        stale = s.db_path.with_name(s.db_path.name + suffix)
+        stale.unlink(missing_ok=True)
+
+    return {"ok": True, "restored_files": extracted,
+            "message": "恢复完成。建议重启服务使新库完全生效"}

@@ -130,13 +130,19 @@ export default function RadarView() {
     if (!confirm('忽略后将永不再次推荐该论文，确认？')) return
     try {
       await api.radarActOnPaper(p.id, 'ignore')
+      // 同一论文可能命中多个 Topic（后端按 (id, topic_id) 多行存储），
+      // ignore 会让所有分组里的该论文一起消失，total 需按实际移除数递减
       setDay((cur) => {
         if (!cur) return cur
         const next: Record<string, RadarPaper[]> = {}
+        let removed = 0
         for (const [tid, arr] of Object.entries(cur.topics)) {
-          next[tid] = arr.filter((x) => x.id !== p.id)
+          next[tid] = arr.filter((x) => {
+            if (x.id === p.id) { removed++; return false }
+            return true
+          })
         }
-        return { ...cur, topics: next, total: cur.total - 1 }
+        return { ...cur, topics: next, total: Math.max(0, cur.total - removed) }
       })
     } catch (e) {
       alert(String(e).replace(/^Error:\s*/, ''))

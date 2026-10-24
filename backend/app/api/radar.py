@@ -8,6 +8,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from ..services import radar, radar_topics
+from ..services.radar import PipelineBusyError
 
 router = APIRouter(prefix="/radar", tags=["radar"])
 
@@ -42,6 +43,9 @@ def refresh() -> dict[str, Any]:
     """立即执行一轮完整管道（抓取→初筛→评审→归档）。耗时较长（含 LLM 调用）。"""
     try:
         return radar.run_pipeline(force=True)
+    except PipelineBusyError as e:
+        # 并发刷新是请求冲突，不是服务端错误
+        raise HTTPException(409, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"刷新失败: {e}") from e
 

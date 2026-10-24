@@ -13,7 +13,14 @@ from .api import api as api_router
 from .core.config import get_settings
 from .core.db import init_db
 
-app = FastAPI(title="Paper Reader", version="0.1.0")
+app = FastAPI(
+    title="Paper Reader", version="0.1.0",
+    # 公网部署（设了 AUTH_TOKEN）时关闭交互文档与 OpenAPI schema：
+    # 它们不在 /api 前缀下，鉴权中间件管不到，等于向扫描器公开全部路由面。
+    docs_url="/docs" if not get_settings().auth_token else None,
+    redoc_url="/redoc" if not get_settings().auth_token else None,
+    openapi_url="/openapi.json" if not get_settings().auth_token else None,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -73,13 +80,20 @@ from fastapi.responses import FileResponse as _FileResponse
 def get_parsed_asset(doc_id: str, subpath: str):
     """提供 parsed/<doc_id>/ 下的文件（图片、full.md 等）。
 
-    注意：这里做路径穿越校验，只允许访问该文档自己的目录。
+    注意：doc_id 必须先通过 uuid 校验再做路径拼接——仅靠 resolve 后的
+    relative_to(base) 不够，doc_id=".." 会让 base 本身越出 parsed_dir，
+    包含性校验形同虚设（可读到 library.db 等全库文件）。
     """
+    from .services.library import is_valid_doc_id
+
     s = get_settings()
+    if not is_valid_doc_id(doc_id):
+        raise _HTTPException(404, "资源不存在")
     base = (s.parsed_dir / doc_id).resolve()
     target = (base / subpath).resolve()
     try:
         target.relative_to(base)
+        base.relative_to(s.parsed_dir.resolve())
     except ValueError:
         raise _HTTPException(403, "非法路径")
     if not target.is_file():

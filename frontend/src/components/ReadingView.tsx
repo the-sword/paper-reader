@@ -8,6 +8,7 @@
  *   - 公式用 KaTeX 渲染，图表显示占位
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import DOMPurify from 'dompurify'
 import { useStore } from '../stores/useStore'
 import { api, type Segment } from '../api/client'
 import RichText, { normalizeOcrSpacing } from './RichText'
@@ -1015,6 +1016,9 @@ function SegmentBlock({
   }
 
   if (seg.kind === 'table') {
+    // seg.source 是 MinerU 从（不可信的）PDF 解析出的表格 HTML，
+    // 可能携带 <img onerror> 等载荷，必须消毒后才能进 innerHTML
+    const safeTable = DOMPurify.sanitize(seg.source, { USE_PROFILES: { html: true } })
     return (
       <div
         ref={register}
@@ -1025,7 +1029,7 @@ function SegmentBlock({
           border: '1px solid var(--border)', borderRadius: 8, padding: 4,
           background: 'var(--bg-card)',
         }}
-        dangerouslySetInnerHTML={{ __html: seg.source }}
+        dangerouslySetInnerHTML={{ __html: safeTable }}
       />
     )
   }
