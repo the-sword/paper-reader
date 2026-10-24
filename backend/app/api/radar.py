@@ -8,6 +8,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from ..services import radar, radar_topics
+from ..services.arxiv_taxonomy import get_cached_taxonomy, sync_taxonomy
 from ..services.radar import PipelineBusyError
 
 router = APIRouter(prefix="/radar", tags=["radar"])
@@ -116,6 +117,28 @@ def import_yaml(body: YamlImportReq) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"导入失败: {e}") from e
     return {"ok": True, **result, "topics": radar_topics.get_topics()}
+
+
+@router.get("/config/arxiv-categories")
+def arxiv_categories() -> dict[str, Any]:
+    """远端同步的 arXiv 分类清单（id → 英文名），供分类选择器补充新分类。
+
+    缓存超 30 天时顺带触发一次后台同步（不阻塞响应）。
+    """
+    cached = get_cached_taxonomy()
+    from datetime import datetime, timezone
+    stale = True
+    if cached["synced_at"]:
+        try:
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(cached["synced_at"])
+            stale = age.total_seconds() >= 30 * 86400
+        except ValueError:
+            pass
+    if stale:
+        import threading
+        threading.Thread(target=sync_taxonomy, kwargs={"force": False},
+                         name="radar-taxonomy-sync", daemon=True).start()
+    return {"synced_at": cached["synced_at"], "categories": cached["categories"]}
 
 
 @router.get("/config/export", response_class=PlainTextResponse)

@@ -526,6 +526,9 @@ export const api = {
     return req<RadarSearchResponse>(`/radar/search?${qs}`)
   },
   radarGetConfig: () => req<RadarConfigResponse>('/radar/config'),
+  radarArxivCategories: () =>
+    req<{ synced_at: string; categories: Record<string, string> }>(
+      '/radar/config/arxiv-categories'),
   radarSaveConfig: (c: { topics: RadarTopic[]; scheduler_enabled?: boolean }) =>
     req<{ ok: boolean; topics: RadarTopic[]; scheduler_enabled: boolean }>('/radar/config',
       { method: 'POST', body: JSON.stringify(c) }),

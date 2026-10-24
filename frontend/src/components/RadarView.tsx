@@ -11,6 +11,7 @@ import {
   type RadarPaper, type RadarTopic, type RadarDayResponse, type RadarSearchResponse,
 } from '../api/client'
 import { useStore } from '../stores/useStore'
+import CategoryPicker from './CategoryPicker'
 
 type Tab = 'today' | 'search' | 'config'
 
@@ -59,8 +60,7 @@ export default function RadarView() {
   const [configMsg, setConfigMsg] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null) // 展开编辑的 topic id
 
-  // ---- 归档回溯 ----
-  const [archiveDate, setArchiveDate] = useState('')
+  // ---- 归档回溯：日期框直接绑定 day.date（正在查看的日期），空值时原生 date 控件只会显示 yyyy/mm/dd 占位符 ----
 
   const loadToday = async (date?: string) => {
     setLoading(true)
@@ -353,14 +353,14 @@ export default function RadarView() {
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
             {tab === 'today' && (
-              <input type="date" value={archiveDate}
+              <input type="date" value={day?.date || ''}
                 onChange={(e) => {
-                  setArchiveDate(e.target.value)
-                  if (e.target.value) void loadToday(e.target.value)
-                  else void loadToday()
+                  const d = e.target.value
+                  if (d) void loadToday(d)
                 }}
+                max={new Date().toISOString().slice(0, 10)}
                 style={{ fontSize: 11, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg)', color: 'var(--fg)' }}
-                title="回溯往期情报" />
+                title="查看所选日期的情报（回溯往期）" />
             )}
             {tab === 'today' && (
               <button className="btn-ghost" style={{ fontSize: 12, padding: '5px 12px', border: '1px solid var(--border)' }}
@@ -569,46 +569,38 @@ export default function RadarView() {
                   </div>
 
                   {isOpen && (
-                    <div style={{ padding: '4px 14px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      <label style={{ fontSize: 12, display: 'grid', gridTemplateColumns: '90px 1fr', gap: 8, alignItems: 'center' }}>
-                        <span style={{ color: 'var(--fg-muted)' }}>名称</span>
+                    <div style={{ padding: '4px 14px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <Field label="名称" hint={HINTS.name}>
                         <input value={t.name} onChange={(e) => updateTopic(idx, { name: e.target.value })}
                           style={inputStyle} />
-                      </label>
-                      <label style={{ fontSize: 12, display: 'grid', gridTemplateColumns: '90px 1fr', gap: 8, alignItems: 'center' }}>
-                        <span style={{ color: 'var(--fg-muted)' }} title="小写字母数字下划线，保存后不可改名">Topic ID</span>
+                      </Field>
+                      <Field label="Topic ID" hint={HINTS.id}>
                         <input value={t.id} disabled
                           style={{ ...inputStyle, color: 'var(--fg-muted)', background: 'var(--bg)' }} />
-                      </label>
-                      <label style={{ fontSize: 12, display: 'grid', gridTemplateColumns: '90px 1fr', gap: 8, alignItems: 'center' }}>
-                        <span style={{ color: 'var(--fg-muted)' }} title="arXiv 分类，如 cs.RO / cs.CV，逗号分隔">arXiv 分类</span>
-                        <input value={t.categories.join(', ')}
-                          onChange={(e) => updateTopic(idx, { categories: e.target.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean) })}
-                          placeholder="cs.RO, cs.CV"
-                          style={inputStyle} />
-                      </label>
-                      <label style={{ fontSize: 12, display: 'grid', gridTemplateColumns: '90px 1fr', gap: 8, alignItems: 'center' }}>
-                        <span style={{ color: 'var(--fg-muted)' }} title="规则初筛关键词，任意命中即送 LLM 评审；留空则全量送审">初筛关键词</span>
+                      </Field>
+                      <Field label="arXiv 分类" hint={HINTS.categories}>
+                        <CategoryPicker value={t.categories}
+                          onChange={(categories) => updateTopic(idx, { categories })} />
+                      </Field>
+                      <Field label="初筛关键词" hint={HINTS.keywords}>
                         <input value={t.keywords.join(', ')}
                           onChange={(e) => updateTopic(idx, { keywords: e.target.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean) })}
                           placeholder="occupancy, SLAM, NPU（逗号分隔）"
                           style={inputStyle} />
-                      </label>
-                      <label style={{ fontSize: 12, display: 'grid', gridTemplateColumns: '90px 1fr', gap: 8, alignItems: 'start' }}>
-                        <span style={{ color: 'var(--fg-muted)', paddingTop: 6 }}>LLM 评审侧重</span>
+                      </Field>
+                      <Field label="LLM 评审侧重" hint={HINTS.focus}>
                         <textarea value={t.evaluation_focus} rows={2}
                           onChange={(e) => updateTopic(idx, { evaluation_focus: e.target.value })}
                           placeholder="引导 LLM 的关注维度，如：重点关注实时性、低算力端侧可行性"
                           style={{ ...inputStyle, resize: 'vertical' }} />
-                      </label>
-                      <label style={{ fontSize: 12, display: 'grid', gridTemplateColumns: '90px 1fr', gap: 8, alignItems: 'center' }}>
-                        <span style={{ color: 'var(--fg-muted)' }}>入选阈值</span>
+                      </Field>
+                      <Field label="入选阈值" hint={HINTS.threshold}>
                         <select value={t.min_score_to_show}
                           onChange={(e) => updateTopic(idx, { min_score_to_show: Number(e.target.value) })}
                           style={{ ...inputStyle, width: 120 }}>
                           {[3, 4, 5].map((n) => <option key={n} value={n}>{n} 分及以上</option>)}
                         </select>
-                      </label>
+                      </Field>
                     </div>
                   )}
                 </div>
@@ -643,4 +635,31 @@ export default function RadarView() {
 const inputStyle: React.CSSProperties = {
   fontSize: 12, padding: '6px 10px', borderRadius: 6,
   border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)', outline: 'none',
+}
+
+const fieldStyle: React.CSSProperties = {
+  fontSize: 12, display: 'grid', gridTemplateColumns: '90px 1fr',
+  gap: '4px 8px', alignItems: 'center',
+}
+
+// 字段说明：写在表单里而不是靠用户记忆，placeholder 只在输入前可见，不够
+const HINTS = {
+  name: '显示在看板分组与筛选项上的名字，随意起',
+  id: '内部标识，小写字母数字下划线；创建后不可改（历史归档靠它关联）',
+  categories: '决定每天从 arXiv 抓哪些分类的论文；留空则这个 Topic 抓不到任何论文',
+  keywords: '省钱开关：论文标题/摘要命中任一关键词才送 LLM 评审；留空则该分类全部论文都送审（耗 token）',
+  focus: '告诉 LLM 评审时侧重看什么，影响打分与评语；留空则按通用标准评审',
+  threshold: '评审分达到该值才出现在「今日情报」；带可用代码的论文阈值可放宽 1 分',
+} as const
+
+function Field({ label, title, hint, children }: {
+  label: string; title?: string; hint: string; children: React.ReactNode
+}) {
+  return (
+    <label style={fieldStyle}>
+      <span style={{ color: 'var(--fg-muted)' }} title={title}>{label}</span>
+      {children}
+      <span style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.5 }}>{hint}</span>
+    </label>
+  )
 }

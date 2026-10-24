@@ -66,6 +66,10 @@ def _startup() -> None:
 
     digest.start_scheduler()
     radar.start_scheduler()
+    # arXiv 分类清单：启动时检查同步（30 天间隔，失败静默用缓存/内置表兜底）
+    from .services import arxiv_taxonomy
+    import threading
+    threading.Thread(target=arxiv_taxonomy.ensure_fresh, name="taxonomy-sync", daemon=True).start()
 
 
 app.include_router(api_router, prefix="/api")
