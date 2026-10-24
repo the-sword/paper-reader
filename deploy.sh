@@ -259,12 +259,25 @@ build_frontend() {
   fi
 
   info "构建前端"
+  # 依赖清单（package*.json）变化时必须重装，否则升级后 tsc 找不到
+  # 新增依赖（如新增 dompurify 时旧 node_modules 仍被复用导致构建失败）。
+  local stamp="$ROOT/frontend/node_modules/.deps.stamp"
+  local need_install=0
   if [ ! -d "$ROOT/frontend/node_modules" ]; then
+    need_install=1
+  elif [ ! -f "$stamp" ] \
+    || [ "$ROOT/frontend/package.json" -nt "$stamp" ] \
+    || [ "$ROOT/frontend/package-lock.json" -nt "$stamp" ]; then
+    need_install=1
+  fi
+  if [ "$need_install" = 1 ]; then
     local reg=()
     [ -n "$NPM_REGISTRY" ] && reg=(--registry="$NPM_REGISTRY")
     (cd "$ROOT/frontend" && npm ci --silent "${reg[@]}") \
       || (cd "$ROOT/frontend" && npm install --silent "${reg[@]}") \
       || die "前端依赖安装失败"
+    mkdir -p "$ROOT/frontend/node_modules"
+    touch "$stamp"
   fi
   # 关键：把访问口令注入前端构建产物。
   # 否则前端 import.meta.env.VITE_AUTH_TOKEN 为空，不发 x-auth-token 头，
