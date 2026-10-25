@@ -5,16 +5,25 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from fastapi.responses import FileResponse
 
+from ..services import babeldoc as babeldoc_svc
 from ..services import library
 
 router = APIRouter()
+
+
+def _with_bilingual_flag(rows: list[dict]) -> list[dict]:
+    """为每条文献补充 bilingual_ready（双语 PDF 是否已生成）。"""
+    for r in rows:
+        r["bilingual_ready"] = babeldoc_svc.get_babeldoc_pdf(r["id"]) is not None
+    return rows
 
 
 @router.get("")
 def list_documents(folder_id: str | None = Query(None),
                    tag_id: str | None = Query(None),
                    q: str | None = Query(None)) -> list[dict]:
-    return library.list_documents(folder_id=folder_id, tag_id=tag_id, q=q)
+    rows = library.list_documents(folder_id=folder_id, tag_id=tag_id, q=q)
+    return _with_bilingual_flag(rows)
 
 
 @router.post("/upload")

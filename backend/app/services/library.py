@@ -128,7 +128,9 @@ def import_bytes(data: bytes, file_name: str, title: str | None = None,
 def list_documents(folder_id: str | None = None, tag_id: str | None = None,
                    q: str | None = None) -> list[dict[str, Any]]:
     sql = [
-        "SELECT DISTINCT d.* FROM documents d",
+        "SELECT DISTINCT d.*, "
+        "(SELECT COUNT(*) FROM annotations a WHERE a.document_id=d.id) AS annotation_count "
+        "FROM documents d",
     ]
     joins: list[str] = []
     where: list[str] = []

@@ -1,28 +1,33 @@
+/* 设计令牌（对齐 docs/ui-redesign-v2.svg 的 D 区） */
 :root {
   --bg: #ffffff;
-  --bg-side: #f8f9fb;
+  --bg-side: #f7f8fa;
   --bg-card: #ffffff;
-  --bg-active: #eef2ff;
-  --bg-canvas: #e8eaed;
-  --fg: #374151;
-  --fg-strong: #111827;
-  --fg-muted: #9ca3af;
-  --border: #e5e7eb;
+  --bg-active: #eef0ff;
+  --bg-canvas: #f2f3f5;
+  --fg: #344054;
+  --fg-strong: #101828;
+  --fg-muted: #667085;
+  --border: #eaecf0;
   --accent: #4f46e5;
+  --radius-sm: 6px;
+  --radius: 10px;
+  --shadow-pop: 0 8px 24px rgba(16, 24, 40, 0.14), 0 1px 3px rgba(16, 24, 40, 0.08);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1a1a1e;
-    --bg-side: #202024;
-    --bg-card: #26262b;
-    --bg-active: #2a2a48;
-    --bg-canvas: #141416;
-    --fg: #c9c9d1;
-    --fg-strong: #f0f0f4;
-    --fg-muted: #6b6b78;
-    --border: #303038;
-    --accent: #6366f1;
+    --bg: #18181b;
+    --bg-side: #111113;
+    --bg-card: #1f1f23;
+    --bg-active: #26264a;
+    --bg-canvas: #0b0b0d;
+    --fg: #d4d4d8;
+    --fg-strong: #f4f4f5;
+    --fg-muted: #a1a1aa;
+    --border: #27272a;
+    --accent: #818cf8;
+    --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
   }
 }
 
@@ -33,6 +38,8 @@ html, body, #root { height: 100%; margin: 0; }
 /* 文档级常驻滚动条槽位：内容渲染过程中 vw 会在「有/无滚动条」之间跳变，
    flex 布局的阅读区宽度随之抖动 → 「适应宽度」量出的可用宽度不稳定 */
 html { scrollbar-gutter: stable; }
+/* 应用外壳固定为视口高度，文档本身不滚动：去掉 html 的常驻槽位，避免右侧露出白条 */
+html { overflow: hidden; scrollbar-gutter: auto; }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
@@ -711,17 +718,17 @@ main::-webkit-scrollbar-track { background: transparent; }
    使侧栏、列表、顶栏、阅读区统一跟随所选主题。
    ============================================================ */
 
-/* Crisp 锐利 */
+/* Crisp 锐利（与设计令牌浅色一致） */
 :root[data-reader-theme="crisp"] {
   --bg: #ffffff;
-  --bg-side: #f8f9fb;
+  --bg-side: #f7f8fa;
   --bg-card: #ffffff;
-  --bg-active: #eef2ff;
-  --bg-canvas: #e8eaed;
-  --fg: #374151;
-  --fg-strong: #111827;
-  --fg-muted: #9ca3af;
-  --border: #e5e7eb;
+  --bg-active: #eef0ff;
+  --bg-canvas: #f2f3f5;
+  --fg: #344054;
+  --fg-strong: #101828;
+  --fg-muted: #667085;
+  --border: #eaecf0;
 }
 
 /* Sepia 羊皮纸 */
@@ -753,33 +760,270 @@ main::-webkit-scrollbar-track { background: transparent; }
 
 /* Night 深夜 */
 :root[data-reader-theme="night"] {
-  --bg: #1a1a1b;
-  --bg-side: #202022;
-  --bg-card: #232326;
-  --bg-active: #2c2c34;
-  --bg-canvas: #141416;
-  --fg: #c9c9d1;
-  --fg-strong: #e8e8ee;
-  --fg-muted: #7b7b88;
-  --border: #303038;
-  --accent: #6366f1;
+  --bg: #18181b;
+  --bg-side: #111113;
+  --bg-card: #1f1f23;
+  --bg-active: #26264a;
+  --bg-canvas: #0b0b0d;
+  --fg: #d4d4d8;
+  --fg-strong: #f4f4f5;
+  --fg-muted: #a1a1aa;
+  --border: #27272a;
+  --accent: #818cf8;
 }
 
 /* 主题下的画布区（PDF 页外的底色） */
 :root[data-reader-theme="sepia"] { --bg-canvas: #e5d9bf; }
 :root[data-reader-theme="soft"]  { --bg-canvas: #e9ecef; }
 
-/* 专注阅读模式：隐藏非核心 UI */
-.focus-mode .app-sidebar,
-.focus-mode aside:not(.right-panel),
-.focus-mode .doc-list,
-.focus-mode .resizer {
-  display: none !important;
+/* ---------- 应用外壳：全局导航轨 / 标签页 / 阅读工作台 ---------- */
+.app-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: row;
+  background: var(--bg);
+  overflow: hidden;
 }
-/* 手机抽屉里的文档列表是用户主动展开的浮层，专注模式不拦 */
-.focus-mode .doc-drawer .doc-list {
-  display: flex !important;
+
+.nav-rail {
+  width: 56px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 0;
+  background: var(--bg-side);
+  border-right: 1px solid var(--border);
 }
-.focus-mode .app-header-extra {
+
+.nav-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.nav-item {
+  width: 46px;
+  height: 46px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0;
+}
+.nav-item:hover { background: var(--bg-active); color: var(--fg); }
+.nav-item.active { background: var(--bg-active); color: var(--accent); font-weight: 600; }
+.nav-item:disabled { opacity: 0.4; cursor: not-allowed; background: transparent; }
+
+.app-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-bar {
+  height: 44px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  background: var(--bg-side);
+  border-bottom: 1px solid var(--border);
+}
+
+/* 标签区：横向可滚动，但不露出任何滚动条（纵向滚轮由 TabBar 映射为横向） */
+.tab-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.tab-scroll::-webkit-scrollbar { display: none; }
+
+.tab-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  min-width: 120px;
+  padding: 0 8px 0 12px;
+  margin-top: 8px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.tab-item:hover { color: var(--fg); }
+.tab-item.active {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--fg-strong);
+  font-weight: 600;
+  margin-bottom: -1px;
+  padding-bottom: 1px;
+}
+.tab-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab-close {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-muted);
+  padding: 0;
+  cursor: pointer;
+}
+.tab-close:hover { background: var(--bg-active); color: var(--fg-strong); }
+
+.reader-header {
+  height: 48px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+
+/* 底部浮动工具条：白底胶囊 + 阴影，滚动时淡出 */
+.reader-toolbar {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-pop);
+  font-size: 12px;
+  color: var(--fg);
+  white-space: nowrap;
+  z-index: 40;
+  transition: opacity 240ms ease;
+}
+.reader-toolbar.hidden { opacity: 0; pointer-events: none; }
+.reader-toolbar button.tb-btn {
+  border: none;
+  background: transparent;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+}
+.reader-toolbar button.tb-btn:hover { background: var(--bg-active); }
+.reader-toolbar .tb-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
+
+/* 命令面板 */
+.cmd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.cmd-item.active { background: var(--bg-active); color: var(--fg-strong); }
+.cmd-group {
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* 书库列表行 */
+.lib-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  position: relative;
+}
+.lib-row:hover { background: var(--bg-side); }
+.lib-row.selected { background: var(--bg-active); }
+.lib-row .lib-del { opacity: 0; }
+.lib-row:hover .lib-del { opacity: 1; }
+@media (hover: none) { .lib-row .lib-del { opacity: 1; } }
+.lib-row.dragging { opacity: 0.45; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  white-space: nowrap;
+  background: var(--bg-side);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+}
+.badge.ok { color: #067647; border-color: #abefc6; background: #ecfdf3; }
+.badge.run { color: var(--accent); border-color: var(--bg-active); background: var(--bg-active); }
+
+/* 手机端：导航轨变底部横条，标签栏隐藏 */
+@media (max-width: 767px) {
+  .app-shell { flex-direction: column-reverse; }
+  .nav-rail {
+    width: 100%;
+    height: 56px;
+    flex-direction: row;
+    justify-content: space-around;
+    padding: 0;
+    gap: 0;
+    border-right: none;
+    border-top: 1px solid var(--border);
+  }
+  .nav-rail .nav-logo,
+  .nav-rail .nav-spacer { display: none; }
+  .nav-item { width: auto; flex: 1; height: 56px; border-radius: 0; }
+  .tab-bar { display: none; }
+  .reader-toolbar { bottom: 66px; }
+}
+
+/* 专注阅读模式：隐藏导航轨与标签栏，DocHeader 与右栏保留 */
+.focus-mode .nav-rail,
+.focus-mode .tab-bar {
   display: none !important;
 }

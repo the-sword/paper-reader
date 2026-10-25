@@ -31,6 +31,10 @@ export interface DocumentMeta {
   folders: Folder[]
   tags: Tag[]
   duplicated?: boolean
+  /** 标注条数（后端列表接口补充） */
+  annotation_count?: number
+  /** 双语 PDF 是否已生成（后端列表接口补充） */
+  bilingual_ready?: boolean
 }
 export interface Annotation {
   id: string

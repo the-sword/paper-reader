@@ -1,34 +1,18 @@
 import { useState } from 'react'
-import { useStore } from '../stores/useStore'
+import { useStore, filterBySmartView, type SmartView } from '../stores/useStore'
 import { api, type Folder } from '../api/client'
+import {
+  Icon, PATH_FOLDER, PATH_PLUS, PATH_PENCIL, PATH_TRASH, PATH_RADAR,
+} from './icons'
 
-/**
- * 侧边栏图标一律用内联 SVG，不用 emoji：
- * 缺 emoji 字体的系统/浏览器会把 emoji 渲染成方块（豆腐块）。
- * 路径取 lucide 风格线性图标，颜色跟随 currentColor。
- */
-function Icon({ d, size = 13 }: { d: string | string[]; size?: number }) {
-  const paths = Array.isArray(d) ? d : [d]
-  return (
-    <svg
-      width={size} height={size} viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="2" strokeLinecap="round"
-      strokeLinejoin="round" style={{ flexShrink: 0 }}
-    >
-      {paths.map((p) => <path key={p} d={p} />)}
-    </svg>
-  )
-}
-
-const PATH_BOOK = 'M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20'
-const PATH_FOLDER =
-  'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'
-const PATH_PLUS = 'M12 5v14M5 12h14'
-const PATH_PENCIL = 'M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'
-const PATH_TRASH = [
-  'M3 6h18',
-  'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6',
-  'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2',
+/** 智能视图列表（顺序即展示顺序） */
+const SMART_VIEWS: Array<{ value: SmartView; label: string }> = [
+  { value: 'all', label: '全部论文' },
+  { value: 'recent', label: '最近阅读' },
+  { value: 'unread', label: '未读' },
+  { value: 'parsed', label: '已解析' },
+  { value: 'bilingual', label: '双语就绪' },
+  { value: 'annotated', label: '有笔记' },
 ]
 
 /** api client 抛错形如 "409: {"detail":"..."}"，提取 detail 供提示 */
@@ -46,15 +30,18 @@ function errText(e: unknown): string {
   return m
 }
 
-export default function Sidebar({ width = 260 }: { width?: number }) {
+export default function Sidebar({ width = 200 }: { width?: number }) {
   const folders = useStore((s) => s.folders)
   const tags = useStore((s) => s.tags)
+  const allDocuments = useStore((s) => s.allDocuments)
   const activeFolder = useStore((s) => s.activeFolder)
   const activeTag = useStore((s) => s.activeTag)
+  const smartView = useStore((s) => s.smartView)
   const mainView = useStore((s) => s.mainView)
   const setMainView = useStore((s) => s.setMainView)
   const setFolder = useStore((s) => s.setFolder)
   const setTag = useStore((s) => s.setTag)
+  const setSmartView = useStore((s) => s.setSmartView)
   const refreshSidebar = useStore((s) => s.refreshSidebar)
   const refreshLibrary = useStore((s) => s.refreshLibrary)
 
@@ -139,7 +126,7 @@ export default function Sidebar({ width = 260 }: { width?: number }) {
   const sidebarStyle: React.CSSProperties = {
     width, flexShrink: 0, borderRight: '1px solid var(--border)',
     padding: '12px 10px', overflowY: 'auto', background: 'var(--bg-side)',
-    overflowX: 'hidden',
+    overflowX: 'hidden', display: 'flex', flexDirection: 'column',
   }
 
   const itemStyle = (active: boolean): React.CSSProperties => ({
@@ -214,36 +201,32 @@ export default function Sidebar({ width = 260 }: { width?: number }) {
     )
   }
 
-  return (
-    <aside style={sidebarStyle}>
+  const smartRow = (v: { value: SmartView; label: string }) => {
+    const active = mainView === 'library' && smartView === v.value && !activeFolder && !activeTag
+    return (
       <div
+        key={v.value}
         style={{
-          ...itemStyle(mainView === 'reader' && activeFolder === null && activeTag === null),
-          ...(dragTarget === 'all'
+          ...itemStyle(active),
+          ...(dragTarget === 'all' && v.value === 'all'
             ? { background: 'var(--bg-active)', outline: '2px dashed var(--accent)', outlineOffset: -2 }
             : {}),
         }}
-        onClick={() => {
-          setMainView('reader')
-          setFolder(null)
-        }}
-        {...dropProps(null)}
-        data-drop-target="all"
-        title="拖到此处可移出所有文件夹"
+        onClick={() => setSmartView(v.value)}
+        {...(v.value === 'all' ? dropProps(null) : {})}
+        data-smart-view={v.value}
+        title={v.value === 'all' ? '拖到此处可移出所有文件夹' : undefined}
       >
-        <Icon d={PATH_BOOK} /> 全部文献
+        <span style={{ flex: 1 }}>{v.label}</span>
+        <span style={{ color: 'var(--fg-muted)', fontSize: 11 }}>{filterBySmartView(allDocuments, v.value).length}</span>
       </div>
+    )
+  }
 
-      <div
-        style={{
-          ...itemStyle(mainView === 'radar'),
-          marginTop: 4,
-        }}
-        onClick={() => setMainView('radar')}
-        title="多主题 arXiv 订阅 + 代码活性审计 + LLM 评审"
-      >
-        <span>🛰</span> 情报雷达
-      </div>
+  return (
+    <aside style={sidebarStyle}>
+      <div style={{ ...sectionTitle, marginTop: 0 }}>智能视图</div>
+      {SMART_VIEWS.map(smartRow)}
 
       <div style={sectionTitle}>
         文件夹
@@ -315,6 +298,25 @@ export default function Sidebar({ width = 260 }: { width?: number }) {
             {t.name}
           </span>
         ))}
+      </div>
+
+      {/* 底部：情报雷达入口卡 */}
+      <div
+        onClick={() => setMainView('radar')}
+        title="多主题 arXiv 订阅 + 代码活性审计 + LLM 评审"
+        style={{
+          marginTop: 'auto', paddingTop: 12, cursor: 'pointer',
+        }}
+      >
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '9px 10px',
+          borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
+          background: mainView === 'radar' ? 'var(--bg-active)' : 'var(--bg)',
+          color: 'var(--fg)', fontSize: 12,
+        }}>
+          <Icon d={PATH_RADAR} size={14} />
+          <span style={{ flex: 1 }}>情报雷达</span>
+        </div>
       </div>
     </aside>
   )

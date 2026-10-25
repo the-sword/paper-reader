@@ -4,11 +4,100 @@ import {
   type Annotation, type DocumentMeta, type Folder, type Segment, type Tag,
 } from '../api/client'
 
+/** 书库智能视图：客户端在已获取的文献列表上过滤 */
+export type SmartView = 'all' | 'recent' | 'unread' | 'parsed' | 'bilingual' | 'annotated'
+/** 书库排序方式 */
+export type LibrarySort = 'added' | 'opened' | 'title'
+/** 主视图：书库 / 阅读 / 情报雷达 */
+export type MainView = 'library' | 'reader' | 'radar'
+/** 文档标签页（只存 id 与标题，文档内容按需加载） */
+export interface OpenTab {
+  id: string
+  title: string
+}
+
+const LS_TABS = 'pr.openTabs'
+const LS_PAGE_POS = 'pr.pagePos'
+/** 阅读页码写入 localStorage 的节流间隔（毫秒） */
+const PAGE_POS_SAVE_MS = 500
+
+/** 读取 localStorage JSON，解析失败或类型不符时返回兜底值 */
+function readLocal<T>(key: string, fallback: T, valid: (v: unknown) => v is T): T {
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) return fallback
+    const parsed: unknown = JSON.parse(raw)
+    return valid(parsed) ? parsed : fallback
+  } catch {
+    return fallback
+  }
+}
+
+const isOpenTabs = (v: unknown): v is OpenTab[] =>
+  Array.isArray(v) && v.every((t) => typeof t?.id === 'string' && typeof t?.title === 'string')
+const isPagePos = (v: unknown): v is Record<string, number> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/** 书库列表请求的递增序号 */
+let librarySeq = 0
+
+let pagePosTimer: number | null = null
+/** 立即把当前页码记忆写入 localStorage（定时器触发、页面隐藏/卸载时调用） */
+function flushPagePos(): void {
+  if (pagePosTimer !== null) {
+    window.clearTimeout(pagePosTimer)
+    pagePosTimer = null
+  }
+  window.localStorage.setItem(LS_PAGE_POS, JSON.stringify(useStore.getState().pagePos))
+}
+/** 节流写入页码记忆：定时器触发时读取最新快照，窗口内的变化都会落盘 */
+function schedulePagePosSave(): void {
+  if (pagePosTimer !== null) return
+  pagePosTimer = window.setTimeout(flushPagePos, PAGE_POS_SAVE_MS)
+}
+
+/** 标签页去重追加：已存在则保持原位 */
+function addTab(tabs: OpenTab[], tab: OpenTab): OpenTab[] {
+  return tabs.some((t) => t.id === tab.id) ? tabs : [...tabs, tab]
+}
+
+function persistTabs(tabs: OpenTab[]): void {
+  window.localStorage.setItem(LS_TABS, JSON.stringify(tabs))
+}
+
+/** 按智能视图过滤文献（客户端过滤，不改变后端接口） */
+export function filterBySmartView(docs: DocumentMeta[], view: SmartView): DocumentMeta[] {
+  switch (view) {
+    case 'recent':
+      return docs.filter((d) => d.opened_at).sort((a, b) => (b.opened_at ?? '').localeCompare(a.opened_at ?? ''))
+    case 'unread':
+      return docs.filter((d) => !d.opened_at)
+    case 'parsed':
+      return docs.filter((d) => d.parse_status === 'done')
+    case 'bilingual':
+      return docs.filter((d) => d.bilingual_ready)
+    case 'annotated':
+      return docs.filter((d) => (d.annotation_count ?? 0) > 0)
+    default:
+      return docs
+  }
+}
+
+/** 按排序方式返回新数组（不修改原数组） */
+export function sortDocuments(docs: DocumentMeta[], sort: LibrarySort): DocumentMeta[] {
+  const list = [...docs]
+  if (sort === 'title') return list.sort((a, b) => a.title.localeCompare(b.title, 'zh-CN'))
+  if (sort === 'opened') return list.sort((a, b) => (b.opened_at ?? '').localeCompare(a.opened_at ?? ''))
+  return list
+}
+
 interface State {
   // 库
   folders: Folder[]
   tags: Tag[]
   documents: DocumentMeta[]
+  /** 不受文件夹/标签/搜索影响的全量文献，用于智能视图计数 */
+  allDocuments: DocumentMeta[]
   currentDoc: DocumentMeta | null
   annotations: Annotation[]
   activeFolder: string | null
@@ -16,7 +105,13 @@ interface State {
   search: string
   loading: boolean
   error: string | null
-  mainView: 'reader' | 'radar'
+  mainView: MainView
+  /** 已打开的文档标签页（顺序即标签栏顺序） */
+  openTabs: OpenTab[]
+  /** 每篇文档上次阅读的页码 */
+  pagePos: Record<string, number>
+  smartView: SmartView
+  librarySort: LibrarySort
 
   // 阅读
   segments: Segment[]
@@ -33,10 +128,14 @@ interface State {
   refreshSidebar: () => Promise<void>
   openDocument: (id: string) => Promise<void>
   closeDocument: () => void
+  closeTab: (id: string) => void
+  setPagePos: (docId: string, page: number) => void
   setFolder: (id: string | null) => void
   setTag: (id: string | null) => void
+  setSmartView: (v: SmartView) => void
+  setLibrarySort: (v: LibrarySort) => void
   setSearch: (q: string) => void
-  setMainView: (v: 'reader' | 'radar') => void
+  setMainView: (v: MainView) => void
   refreshAnnotations: (docId: string) => Promise<void>
   addAnnotation: (docId: string, page: number, rects: number[][], quote: string, color: string,
                   opts?: { segmentId?: string; side?: string; kind?: string
@@ -66,6 +165,7 @@ export const useStore = create<State>((set, get) => ({
   folders: [],
   tags: [],
   documents: [],
+  allDocuments: [],
   currentDoc: null,
   annotations: [],
   activeFolder: null,
@@ -73,7 +173,11 @@ export const useStore = create<State>((set, get) => ({
   search: '',
   loading: false,
   error: null,
-  mainView: 'reader',
+  mainView: 'library',
+  openTabs: readLocal<OpenTab[]>(LS_TABS, [], isOpenTabs),
+  pagePos: readLocal<Record<string, number>>(LS_PAGE_POS, {}, isPagePos),
+  smartView: 'all',
+  librarySort: 'added',
 
   segments: [],
   translations: {},
@@ -90,16 +194,25 @@ export const useStore = create<State>((set, get) => ({
   },
 
   refreshLibrary: async () => {
+    // 请求序号：连续触发（如搜索逐字输入）时只采纳最后一次的结果，防止旧响应晚到覆盖
+    const seq = ++librarySeq
     set({ loading: true, error: null })
     try {
       const { activeFolder, activeTag, search } = get()
-      const documents = await api.listDocuments({
-        folder_id: activeFolder ?? undefined,
-        tag_id: activeTag ?? undefined,
-        q: search || undefined,
-      })
-      set({ documents, loading: false })
+      const filtered = !!(activeFolder || activeTag || search)
+      // 有筛选时并行再取一份全量列表，供智能视图计数使用；无筛选直接复用
+      const [documents, allDocuments] = await Promise.all([
+        api.listDocuments({
+          folder_id: activeFolder ?? undefined,
+          tag_id: activeTag ?? undefined,
+          q: search || undefined,
+        }),
+        filtered ? api.listDocuments() : Promise.resolve<DocumentMeta[] | null>(null),
+      ])
+      if (seq !== librarySeq) return
+      set({ documents, allDocuments: allDocuments ?? documents, loading: false })
     } catch (e) {
+      if (seq !== librarySeq) return
       set({ error: String(e), loading: false })
     }
   },
@@ -109,26 +222,61 @@ export const useStore = create<State>((set, get) => ({
     try {
       const currentDoc = await api.getDocument(id)
       const annotations = await api.listAnnotations(id)
-      set({ currentDoc, annotations, loading: false })
+      const openTabs = addTab(get().openTabs, { id, title: currentDoc.title })
+      set({ currentDoc, annotations, openTabs, loading: false })
+      persistTabs(openTabs)
       await get().loadSegments(id)
     } catch (e) {
-      set({ error: String(e), loading: false })
+      // 恢复的标签若已失效（文档被删），顺手移除
+      const openTabs = get().openTabs.filter((t) => t.id !== id)
+      set({ error: String(e), loading: false, openTabs })
+      persistTabs(openTabs)
     }
   },
 
   closeDocument: () =>
     set({ currentDoc: null, annotations: [], segments: [], translations: {} }),
 
+  closeTab: (id) => {
+    const { openTabs, currentDoc } = get()
+    const idx = openTabs.findIndex((t) => t.id === id)
+    if (idx < 0) return
+    const rest = openTabs.filter((t) => t.id !== id)
+    set({ openTabs: rest })
+    persistTabs(rest)
+    if (currentDoc?.id !== id) return
+    // 关闭的是当前文档：优先切到右邻标签，其次左邻；都没有则回书库
+    const neighbor = openTabs[idx + 1] ?? openTabs[idx - 1]
+    // 只有阅读视图下才切到相邻标签；其他视图（如书库删除文档）停留在原视图
+    if (neighbor && get().mainView === 'reader') {
+      void get().openDocument(neighbor.id)
+      return
+    }
+    get().closeDocument()
+    if (!neighbor) set({ mainView: 'library' })
+  },
+
+  setPagePos: (docId, page) => {
+    const pagePos = { ...get().pagePos, [docId]: page }
+    set({ pagePos })
+    schedulePagePosSave()
+  },
+
   setMainView: (v) => set({ mainView: v }),
 
   setFolder: (id) => {
-    set({ activeFolder: id, activeTag: null, mainView: 'reader' })
+    set({ activeFolder: id, activeTag: null, smartView: 'all', mainView: 'library' })
     void get().refreshLibrary()
   },
   setTag: (id) => {
-    set({ activeTag: id, activeFolder: null, mainView: 'reader' })
+    set({ activeTag: id, activeFolder: null, smartView: 'all', mainView: 'library' })
     void get().refreshLibrary()
   },
+  setSmartView: (v) => {
+    set({ smartView: v, activeFolder: null, activeTag: null, mainView: 'library' })
+    void get().refreshLibrary()
+  },
+  setLibrarySort: (v) => set({ librarySort: v }),
   setSearch: (q) => {
     set({ search: q })
     void get().refreshLibrary()
@@ -383,3 +531,11 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 }))
+
+// 离开页面前立即落盘，避免节流窗口内的页码变化丢失
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', flushPagePos)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushPagePos()
+  })
+}
