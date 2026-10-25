@@ -83,6 +83,11 @@ export default function App() {
   const clampScale = (v: number) => Math.max(SCALE_MIN, Math.min(SCALE_MAX, +v.toFixed(2)))
 
   /** 实际完成拟合返回 true；元素/基准未就绪返回 false，供调用方决定是否记账 */
+  // 「适应宽度」跟随模式：auto-fit 后置 true，容器尺寸变化（侧栏开合/
+  // 分隔条拖动/窗口缩放）时经 ResizeObserver 重拟合；手动缩放退跟随。
+  const fitModeRef = useRef(false)
+  const exitFitMode = () => { fitModeRef.current = false }
+
   const fitWidth = useCallback((): boolean => {
     const el = mainRef.current
     if (!el) return false
@@ -100,6 +105,7 @@ export default function App() {
     // 手机上允许缩得更小（0.15），PDF 才能适应窄屏宽度而非横向滚动
     const minScale = isMobile ? 0.15 : SCALE_MIN
     setScale(Math.max(minScale, Math.min(SCALE_MAX, +(avail / base).toFixed(2))))
+    fitModeRef.current = true
     return true
   }, [baseWidth, isMobile])
 
@@ -184,6 +190,21 @@ export default function App() {
     const t = window.setTimeout(() => { fitWidthRef.current() }, 50)
     return () => window.clearTimeout(t)
   }, [focusMode])
+
+  // 容器尺寸变化时，跟随「适应宽度」模式自动重拟合（手动缩放后不跟随）。
+  // 覆盖：侧栏/右栏开合、分隔条拖动、窗口缩放、PWA 横竖屏切换。
+  useEffect(() => {
+    const el = mainRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let raf = 0
+    const ro = new ResizeObserver(() => {
+      if (!fitModeRef.current) return
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => { fitWidthRef.current() })
+    })
+    ro.observe(el)
+    return () => { ro.disconnect(); cancelAnimationFrame(raf) }
+  }, [])
 
   // 打开文档后自动收起移动端列表抽屉（桌面端 showList 不参与渲染，无副作用）
   const openedDocId = currentDoc?.id
@@ -296,10 +317,10 @@ export default function App() {
       if (e.key === 'Escape' && focusMode) {
         setFocusMode(false); e.preventDefault(); return
       }
-      if (e.key === '+' || e.key === '=') { setScale((s) => clampScale(s + SCALE_STEP)); e.preventDefault() }
-      else if (e.key === '-') { setScale((s) => clampScale(s - SCALE_STEP)); e.preventDefault() }
+      if (e.key === '+' || e.key === '=') { exitFitMode(); setScale((s) => clampScale(s + SCALE_STEP)); e.preventDefault() }
+      else if (e.key === '-') { exitFitMode(); setScale((s) => clampScale(s - SCALE_STEP)); e.preventDefault() }
       else if (e.key === '0') { fitWidth(); e.preventDefault() }
-      else if (e.key === '1') { setScale(1); e.preventDefault() }
+      else if (e.key === '1') { exitFitMode(); setScale(1); e.preventDefault() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -410,13 +431,13 @@ export default function App() {
 
           {(view === 'pdf' || view === 'bilingual') && (
             <>
-              <button className="btn-ghost" title="缩小 (−)" onClick={() => setScale((s) => clampScale(s - SCALE_STEP))}>－</button>
+              <button className="btn-ghost" title="缩小 (−)" onClick={() => { exitFitMode(); setScale((s) => clampScale(s - SCALE_STEP)) }}>－</button>
               <span
                 title="当前缩放（点击回到 100%）"
                 style={{ fontSize: 12, width: 48, textAlign: 'center', cursor: 'pointer' }}
-                onClick={() => setScale(1)}
+                onClick={() => { exitFitMode(); setScale(1) }}
               >{Math.round(scale * 100)}%</span>
-              <button className="btn-ghost" title="放大 (+)" onClick={() => setScale((s) => clampScale(s + SCALE_STEP))}>＋</button>
+              <button className="btn-ghost" title="放大 (+)" onClick={() => { exitFitMode(); setScale((s) => clampScale(s + SCALE_STEP)) }}>＋</button>
               <button className="btn-ghost" title="适应宽度 (0)" onClick={fitWidth}>适应宽度</button>
             </>
           )}
