@@ -520,6 +520,7 @@ export default function App() {
                     url={api.babelDocPdfUrl(currentDoc.id)}
                     scale={scale}
                     onBaseWidth={onBaseWidthBilingual}
+                    dualPage
                   />
                 ) : (
                   <div className="hint" style={{ padding: 40, textAlign: 'center' }}>

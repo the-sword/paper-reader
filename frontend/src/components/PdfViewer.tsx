@@ -27,6 +27,11 @@ interface Props {
   scale: number
   /** 文档加载后回调原始页面宽度（PDF pt，scale=1 时的宽度），用于「适应宽度」 */
   onBaseWidth?: (w: number) => void
+  /** 双语页（左原文|右译文并排，页宽为原文 2 倍）。
+   *  标注只允许落在原文列、统一存「原文页坐标系」：创建时把选区裁到
+   *  左半 [0,0.5] 后 x*2 折回原页，渲染时 /2 画在原文半页，
+   *  保证与 PDF 视图共用同一坐标系、互切不漂移。 */
+  dualPage?: boolean
 }
 
 interface Bubble {
@@ -34,6 +39,8 @@ interface Bubble {
   y: number
   page: number
   rects: number[][]
+  /** 双语页选区锚定的半侧：source=原文列 / zh=译文列 */
+  side?: 'source' | 'zh'
   quote: string
   /** 划词翻译结果（点「翻译」后填充） */
   translated?: string
@@ -175,7 +182,7 @@ async function extractRefsFromPdf(pdf: PDFDocumentProxy): Promise<Record<number,
   return out
 }
 
-export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
+export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const pdfRef = useRef<PDFDocumentProxy | null>(null)
@@ -386,7 +393,11 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
       }
     }
 
-    /** 绘制指定页的标注（虚拟化后标注层随渲染才存在） */
+    /** 绘制指定页的标注（虚拟化后标注层随渲染才存在）。
+     *  双语页按 side 画到对应半页：source 折半画左半原文列，
+     *  zh 折半偏移画右半译文列；单页视图都画原文位置 */
+    const annX = (x: number, side?: string) =>
+      (dualPage ? (side === 'zh' ? 0.5 + x / 2 : x / 2) : x) * 100
     const drawPageAnnotations = (layer: HTMLElement, pageNum: number) => {
       const anns = annotationsRef.current.filter((a) => a.page === pageNum)
       for (const a of anns) {
@@ -394,11 +405,10 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
           const el = document.createElement('div')
           el.className = 'ann-rect'
           el.title = `${a.quote ?? ''}${a.comment ? `\n\n${a.comment}` : ''}`
-          el.style.left = `${r[0] * 100}%`
+          el.style.left = `${annX(r[0], a.side)}%`
           el.style.top = `${r[1] * 100}%`
-          el.style.width = `${(r[2] - r[0]) * 100}%`
+          el.style.width = `${annX(r[2], a.side) - annX(r[0], a.side)}%`
           el.style.height = `${(r[3] - r[1]) * 100}%`
-          el.style.background = `${a.color}59`
           el.style.borderBottom = `2px solid ${a.color}`
           el.dataset.annId = a.id
           el.addEventListener('dblclick', () => { void removeAnnotation(a.id) })
@@ -473,16 +483,17 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
     for (const [pageStr, anns] of Object.entries(byPage)) {
       const layer = host.querySelector<HTMLElement>(`.ann-layer[data-page="${pageStr}"]`)
       if (!layer) continue
+      const annX = (x: number, side?: string) =>
+        (dualPage ? (side === 'zh' ? 0.5 + x / 2 : x / 2) : x) * 100
       for (const a of anns) {
         for (const r of a.rects) {
           const el = document.createElement('div')
           el.className = 'ann-rect'
           el.title = `${a.quote ?? ''}${a.comment ? `\n\n${a.comment}` : ''}`
-          el.style.left = `${r[0] * 100}%`
+          el.style.left = `${annX(r[0], a.side)}%`
           el.style.top = `${r[1] * 100}%`
-          el.style.width = `${(r[2] - r[0]) * 100}%`
+          el.style.width = `${annX(r[2], a.side) - annX(r[0], a.side)}%`
           el.style.height = `${(r[3] - r[1]) * 100}%`
-          el.style.background = `${a.color}59`
           el.style.borderBottom = `2px solid ${a.color}`
           el.dataset.annId = a.id
           el.addEventListener('dblclick', () => { void removeAnnotation(a.id) })
@@ -528,7 +539,7 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
       anchorPage = pageNum
 
       const pr = pageEl.getBoundingClientRect()
-      // 裁掉超出页面的部分
+      // 裁掉超出页面的部分（先保留页内 x，半侧归类在后面统一做）
       const x1 = Math.max(0, Math.min(1, (r.left - pr.left) / pr.width))
       const x2 = Math.max(0, Math.min(1, (r.right - pr.left) / pr.width))
       const y1 = Math.max(0, Math.min(1, (r.top - pr.top) / pr.height))
@@ -539,15 +550,53 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
 
     if (!rects.length || !anchorPage) { setBubble(null); return }
 
+    // 双语页：按选区锚定半侧（第一个矩形中心）归到 source/zh；
+    // 坐标统一折回原文页空间——原文列 x*2，译文列 (x-0.5)*2（版式镜像）；
+    // 横跨中缝混入另一侧的矩形丢弃，保证一条标注只含一种半侧
+    let side: 'source' | 'zh' = 'source'
+    if (dualPage) {
+      const f = rects[0]
+      side = (f[0] + f[2]) / 2 > 0.5 ? 'zh' : 'source'
+      const lx = (x: number) =>
+        Math.max(0, Math.min(1, side === 'zh' ? (x - 0.5) * 2 : x * 2))
+      const mapped = rects
+        .filter((r) => ((r[0] + r[2]) / 2 > 0.5) === (side === 'zh'))
+        .map((r) => [lx(r[0]), r[1], lx(r[2]), r[3]] as number[])
+        .filter((r) => r[2] - r[0] > 0.001)
+      if (!mapped.length) { setBubble(null); return }
+      rects.splice(0, rects.length, ...mapped)
+    }
+
+    // 同一视觉行常被 getClientRects 拆成多个内联片段矩形（粗体/引用/行高
+    // 不同的 span 边界），各自画线会出现「一行两条下划线」；垂直重叠过半
+    // 的矩形属于同一行，合并为并集只画一条。放在半侧过滤之后，避免双语页
+    // 左右两列的同行矩形被并成跨中缝的大矩形
+    rects.sort((a, b) => a[1] - b[1])
+    const merged: number[][] = []
+    for (const r of rects) {
+      const last = merged[merged.length - 1]
+      const ov = last
+        ? Math.min(last[3], r[3]) - Math.max(last[1], r[1])
+        : -1
+      if (last && ov > Math.min(last[3] - last[1], r[3] - r[1]) * 0.5) {
+        last[0] = Math.min(last[0], r[0]); last[1] = Math.min(last[1], r[1])
+        last[2] = Math.max(last[2], r[2]); last[3] = Math.max(last[3], r[3])
+      } else {
+        merged.push([...r])
+      }
+    }
+    rects.splice(0, rects.length, ...merged)
+
     const first = range.getClientRects()[0]
     setBubble({
       x: first.left + first.width / 2,
       y: first.top - 12,
       page: anchorPage,
       rects,
+      side,
       quote: sel.toString().trim().slice(0, 2000),
     })
-  }, [])
+  }, [dualPage])
 
   /** 划词翻译（手动触发） */
   const translateSelection = async () => {
@@ -574,7 +623,8 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
 
   const confirmHighlight = async () => {
     if (!bubble || !currentDoc) return
-    await addAnnotation(currentDoc.id, bubble.page, bubble.rects, bubble.quote, color)
+    await addAnnotation(currentDoc.id, bubble.page, bubble.rects, bubble.quote, color,
+      { side: bubble.side ?? 'source' })
     setBubble(null)
     window.getSelection()?.removeAllRanges()
   }

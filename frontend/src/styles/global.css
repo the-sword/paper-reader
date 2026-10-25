@@ -123,7 +123,6 @@ input:focus, textarea:focus { border-color: var(--accent); }
 
 .ann-rect {
   position: absolute;
-  mix-blend-mode: multiply;
   pointer-events: auto;
   z-index: 0;
   cursor: pointer;

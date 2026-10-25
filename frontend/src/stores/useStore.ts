@@ -140,6 +140,21 @@ export const useStore = create<State>((set, get) => ({
   },
 
   addAnnotation: async (docId, page, rects, quote, color, opts) => {
+    // 乐观更新：先插入临时标注让高亮立即可见，落库成功后刷新替换；
+    // 失败则回滚并报错。避免后端被同步任务阻塞时高亮“消失”的体感
+    const now = new Date().toISOString()
+    const tmp: Annotation = {
+      id: `tmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      document_id: docId, page, kind: opts?.kind ?? 'highlight',
+      rects, color, quote, comment: '',
+      segment_id: opts?.segmentId ?? null,
+      side: opts?.side ?? 'source',
+      segment_idx: null,
+      start_offset: opts?.startOffset ?? null,
+      end_offset: opts?.endOffset ?? null,
+      created_at: now, updated_at: now,
+    }
+    set((s) => ({ annotations: [...s.annotations, tmp] }))
     try {
       await api.createAnnotation({
         document_id: docId, page, kind: opts?.kind ?? 'highlight',
@@ -151,7 +166,10 @@ export const useStore = create<State>((set, get) => ({
       })
       await get().refreshAnnotations(docId)
     } catch (e) {
-      set({ error: String(e) })
+      set((s) => ({
+        annotations: s.annotations.filter((a) => a.id !== tmp.id),
+        error: String(e),
+      }))
     }
   },
 

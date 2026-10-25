@@ -9,8 +9,10 @@
  *      不可变文件，cache-first → 已读文献可离线打开。
  *      只缓存完整 200 响应；pdf.js 的 Range 分块请求命中缓存时由 SW 现场切成 206，
  *      绝不把部分内容写进缓存（否则离线拿到半截 PDF）。
- *  - 阅读视图数据（segments / references / asset 图片 / 标注）：stale-while-revalidate，
+ *  - 解析产物（segments / references / asset 图片）：stale-while-revalidate，
  *      离线时展示最近一次已加载的内容
+ *  - 可变数据（标注 / 文献 / 文件夹 / 标签）：network-first，
+ *      在线保证写完再读拿到最新（杜绝「保存不显示、刷新才出现」），断网回退缓存
  *  - 其余 API：完全网络优先，不缓存（文献列表、翻译、任务状态必须实时）
  *
  * 更新机制：HTML 每次联网校验，新 HTML 引用新 hash 的资源，天然失效旧缓存；
@@ -19,7 +21,7 @@
  */
 const SHELL_CACHE = 'pr-shell-v3'
 const PDF_CACHE = 'pr-pdf-v2'
-const DATA_CACHE = 'pr-data-v1'
+const DATA_CACHE = 'pr-data-v2'
 
 // 当前激活的缓存桶（activate 时清理其它 pr-* 桶）
 const ACTIVE = new Set([SHELL_CACHE, PDF_CACHE, DATA_CACHE])
@@ -79,8 +81,12 @@ self.addEventListener('install', (event) => {
 // 可离线阅读的 API 资源判定
 const RE_PDF = /^\/api\/(documents\/[^/]+\/file|reading\/babeldoc\/[^/]+\/pdf)$/
 // SWR（stale-while-revalidate）：离线时用最近一次快照，在线时后台刷新——
-// 文档列表/文件夹/标签 + 解析产物 + 标注，保证「离线打开应用能进库、能读已缓存的文献」
-const RE_READER_DATA = /^\/api\/(reading\/[^/]+\/(segments|references|asset\/.+)|annotations|documents(\/[^/]+)?|folders|tags)$/
+// 解析产物（解析一次后内容不可变）：SWR —— 秒开 + 离线可用
+const RE_READER_DATA = /^\/api\/reading\/[^/]+\/(segments|references|asset\/.+)$/
+// 会被增删改的资源（标注/文献/文件夹/标签）：network-first —— 在线必须拿最新，
+// 否则写完再读会命中 SWR 旧快照（标注「保存后不显示、刷新才出现」的成因）；
+// 断网时回退缓存保证离线可读
+const RE_MUTABLE_DATA = /^\/api\/(annotations|documents(\/[^/]+)?|folders|tags)$/
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
@@ -153,6 +159,18 @@ async function handlePdf(req, event) {
   return resp
 }
 
+/** 可变数据：network-first —— 在线拿最新并刷新缓存，断网回退缓存 */
+async function networkFirst(req) {
+  const cache = await caches.open(DATA_CACHE)
+  try {
+    const resp = await fetch(req)
+    if (resp.status === 200) await cache.put(req, resp.clone())
+    return resp
+  } catch {
+    return (await cache.match(req)) || Response.error()
+  }
+}
+
 /** 阅读数据：stale-while-revalidate —— 有缓存秒回 + 后台刷新，断网用旧数据 */
 async function staleWhileRevalidate(req, event) {
   const cache = await caches.open(DATA_CACHE)
@@ -177,6 +195,8 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/api/')) {
     if (RE_PDF.test(url.pathname)) {
       event.respondWith(handlePdf(req, event))
+    } else if (RE_MUTABLE_DATA.test(url.pathname)) {
+      event.respondWith(networkFirst(req))
     } else if (RE_READER_DATA.test(url.pathname)) {
       event.respondWith(staleWhileRevalidate(req, event))
     }
