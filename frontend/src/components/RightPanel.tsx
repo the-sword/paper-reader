@@ -4,9 +4,10 @@
 import { useState } from 'react'
 import NotePanel from './NotePanel'
 import SummaryPanel from './SummaryPanel'
+import ChatPanel from './ChatPanel'
 import { useStore } from '../stores/useStore'
 
-type Tab = 'notes' | 'summary'
+type Tab = 'notes' | 'summary' | 'chat'
 
 export default function RightPanel({ width }: { width: number }) {
   const [tab, setTab] = useState<Tab>('notes')
@@ -27,6 +28,7 @@ export default function RightPanel({ width }: { width: number }) {
         {([
           ['notes', `标注${annotations.length ? ` (${annotations.length})` : ''}`],
           ['summary', 'AI 总结'],
+          ['chat', '问答'],
         ] as Array<[Tab, string]>).map(([t, label]) => (
           <button
             key={t}
@@ -42,13 +44,13 @@ export default function RightPanel({ width }: { width: number }) {
       </div>
 
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        {tab === 'notes' ? (
-          <NotePanel width={width} embedded />
-        ) : (
+        {tab === 'notes' && <NotePanel width={width} embedded />}
+        {tab === 'summary' && (
           currentDoc
             ? <SummaryPanel />
             : <div className="hint" style={{ padding: 20 }}>选择一篇文献后可生成 AI 总结</div>
         )}
+        {tab === 'chat' && <ChatPanel />}
       </div>
     </aside>
   )

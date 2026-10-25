@@ -103,6 +103,7 @@ paper-reader/
 | 清除译文缓存并重翻 | 按需切换引擎重翻（机翻快、AI 准，AI 会保留人名原文） |
 | AI 总结 | 7 种类型（**领读·一页纸速读卡 / 领读·苏格拉底精读**：证据分级、论证链评估、图表三问、费曼复述模板 / 概览 / 方法 / 贡献 / 局限 / 自由提问），后台任务执行，**可随时取消**，流式显示进度 |
 | 领读教练 | PaperSocratic Reader 方案 C（见下节）：速读卡 + 按目标精读的多轮会话 |
+| AI 问答 | 右栏「问答」页签：基于全文上下文的自由对话（类 Sider/Kimi 侧边栏），随读随问、历史保留 |
 | 术语表 | 每行 `英文=中文`，翻译时注入 prompt 保证全文译名一致 |
 
 ### 领读教练（PaperSocratic Reader · 方案 C）
@@ -118,6 +119,7 @@ UI 设计稿见 `docs/socratic-reader-ui.svg`。思路：**静态速读卡 + 按
 - `backend/app/services/reader_coach.py`：目标路由 `GOALS`、system prompt 组装（语料 + 路线 + 苏格拉底门禁）、会话/消息落库
 - `backend/app/api/phase3.py`：`/reading/reader/goals`、`/reader/{doc}/chat`、`/reader/{doc}/sessions`、`DELETE /reader/session/{id}`
 - `frontend/src/components/SummaryPanel.tsx`：速读卡下方的目标 chips + 会话线程
+- `frontend/src/components/ChatPanel.tsx` + `RightPanel.tsx` 第三页签：自由问答复用同一套会话接口，`goal=free` 走伴读助手 prompt（不进 GOALS，不出现在精读 chips 里），首条问题发出时才建会话
 - 语料复用 `summarize._build_corpus`（图表仅 caption，受 24k 字符截断）
 
 后续升级到方案 B（完整会话式领读）只需：会话面板独立成主视图 + 显式阶段状态机，会话底座不变。

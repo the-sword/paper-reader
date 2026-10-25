@@ -41,6 +41,10 @@ GOALS: dict[str, dict[str, str]] = {
     },
 }
 
+# 自由问答：不进 GOALS（不显示在精读目标 chips），供「问答」页签的伴读对话用
+FREE_GOAL = "free"
+FREE_LABEL = "自由问答"
+
 # 历史消息窗口：正文在 system 里常驻，对话只保留最近若干轮控制上下文体积
 _HISTORY_LIMIT = 16
 
@@ -50,6 +54,20 @@ def _now() -> str:
 
 
 def _system_prompt(goal: str, corpus: str) -> str:
+    if goal == FREE_GOAL:
+        return (
+            "你是论文伴读助手：读者正在阅读下方论文，基于论文内容实时解答问题。\n\n"
+            "规则：\n"
+            "1. 优先依据论文内容回答，明确区分「论文所述」与「你的推断/外部知识」；"
+            "论文没写的直接说「论文未提供」，不编造。\n"
+            "2. 回答简洁直接，适合侧边栏随读随问；复杂概念可先一句话再给展开。\n"
+            "3. 读者追问时顺着上文继续，不要重复整段背景；指不到具体段落时可建议"
+            "读者去看哪一节/哪张图。\n"
+            "4. 被要求评估证据/对比实验时，仍遵守证据分级规则：\n"
+            + sum_svc._SOCRATIC_RULES
+            + "\n\n论文内容（图表以「[图] 图注」「[表格]」标记呈现，信息不足处写「论文未提供」）：\n"
+            + corpus
+        )
     g = GOALS[goal]
     return (
         "你是一名严谨的论文领读教练（PaperSocratic Reader）。"
@@ -97,9 +115,14 @@ def _append_message(session_id: str, role: str, content: str) -> None:
         )
 
 
-def create_session(doc_id: str, goal: str) -> dict[str, Any]:
-    """建会话并生成开场回复（教练按目标路线带第一轮）。"""
-    if goal not in GOALS:
+def create_session(
+    doc_id: str, goal: str, first_message: str | None = None,
+) -> dict[str, Any]:
+    """建会话并生成首轮回复。
+
+    精读目标：教练按路线自动开场；自由问答：以读者首条问题作为第一轮。
+    """
+    if goal != FREE_GOAL and goal not in GOALS:
         raise ValueError(f"未知的阅读目标：{goal}")
     sid = str(uuid.uuid4())
     with db() as conn:
@@ -108,10 +131,15 @@ def create_session(doc_id: str, goal: str) -> dict[str, Any]:
                VALUES (?,?,?,?)""",
             (sid, doc_id, goal, _now()),
         )
-    kickoff = (
-        f"我的阅读目标是「{GOALS[goal]['label']}」。"
-        "请按对应路线带我精读这篇论文，先回顾速读卡再进入第一个阶段。"
-    )
+    if first_message:
+        kickoff = first_message
+    elif goal == FREE_GOAL:
+        kickoff = "请用一句话告诉我你能基于这篇论文解答什么，再给两个可问的问题示例。"
+    else:
+        kickoff = (
+            f"我的阅读目标是「{GOALS[goal]['label']}」。"
+            "请按对应路线带我精读这篇论文，先回顾速读卡再进入第一个阶段。"
+        )
     reply = _turn(sid, doc_id, goal, kickoff)
     return {"session_id": sid, "goal": goal, "reply": reply}
 
@@ -133,7 +161,10 @@ def chat(doc_id: str, body: dict[str, Any]) -> dict[str, Any]:
     session_id = body.get("session_id")
     if not session_id:
         goal = body.get("goal") or "quick"
-        return create_session(doc_id, goal)
+        message = (body.get("message") or "").strip() or None
+        if message and len(message) > 4000:
+            raise ValueError("消息过长")
+        return create_session(doc_id, goal, message)
 
     sess = _load_session(session_id)
     if not sess or sess["document_id"] != doc_id:
