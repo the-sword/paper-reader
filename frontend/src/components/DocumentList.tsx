@@ -32,7 +32,7 @@ export default function DocumentList({ width = 340 }: { width?: number }) {
   }
 
   return (
-    <div style={{ width, flexShrink: 0, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', background: 'var(--bg)', minWidth: 0 }}>
+    <div className="doc-list" style={{ width, flexShrink: 0, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', background: 'var(--bg)', minWidth: 0 }}>
       <div style={{ padding: 10, borderBottom: '1px solid var(--border)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
         <input
           value={search}

@@ -196,6 +196,29 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [bubble, setBubble] = useState<Bubble | null>(null)
+  // 设备像素比进 state：浏览器页面缩放 / 跨显示器拖动 / 系统缩放会让
+  // devicePixelRatio 变化，旧位图被拉伸即发虚——监听后触发整页重渲染
+  const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1)
+  useEffect(() => {
+    const check = () => {
+      const cur = window.devicePixelRatio || 1
+      setDpr((prev) => (prev !== cur ? cur : prev))
+    }
+    let mq: MediaQueryList | null = null
+    const onChange = () => { check(); watch() }
+    const watch = () => {
+      mq = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+      mq.addEventListener('change', onChange, { once: true })
+    }
+    watch()
+    // resize 兜底：浏览器页面缩放必触发；matchMedia 的 resolution
+    // 变化在部分环境（CDP 模拟/个别内核）不派发事件
+    window.addEventListener('resize', check)
+    return () => {
+      mq?.removeEventListener('change', onChange)
+      window.removeEventListener('resize', check)
+    }
+  }, [])
   const [color, setColor] = useState(COLORS[0])
 
   // 虚拟化渲染：页面渲染完成时才创建标注层，
@@ -292,7 +315,6 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
 
     const host = hostRef.current
     let cancelled = false
-    const ratio = Math.min(window.devicePixelRatio || 1, 2)
     // pdf.js 文本层 span 用 calc(var(--scale-factor) * N px) 定位，
     // 必须在页面容器上声明该变量，否则定位整体漂移（框选错位）
     host.style.setProperty('--scale-factor', String(scale))
@@ -345,7 +367,9 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
         pageEl.style.height = `${vp.height}px`
         delete pageEl.dataset.needSize
 
-        // 1) canvas
+        // 1) canvas：像素比上限 3（覆盖 3x 手机/PWA 屏，旧上限 2 导致发虚），
+        //    同时把位图宽限制在 4096px 内防显存占用失控
+        const ratio = Math.min(dpr, 3, 4096 / vp.width)
         const canvas = document.createElement('canvas')
         canvas.width = Math.floor(vp.width * ratio)
         canvas.height = Math.floor(vp.height * ratio)
@@ -469,7 +493,7 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
       cancelled = true
       ;(host as HTMLElement & { __pageIO?: IntersectionObserver }).__pageIO?.disconnect()
     }
-  }, [numPages, scale])
+  }, [numPages, scale, dpr])
 
   // ---- 标注绘制 ----
   useEffect(() => {

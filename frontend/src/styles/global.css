@@ -772,8 +772,13 @@ main::-webkit-scrollbar-track { background: transparent; }
 /* 专注阅读模式：隐藏非核心 UI */
 .focus-mode .app-sidebar,
 .focus-mode aside,
+.focus-mode .doc-list,
 .focus-mode .resizer {
   display: none !important;
+}
+/* 手机抽屉里的文档列表是用户主动展开的浮层，专注模式不拦 */
+.focus-mode .doc-drawer .doc-list {
+  display: flex !important;
 }
 .focus-mode .app-header-extra {
   display: none !important;

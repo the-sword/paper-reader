@@ -490,7 +490,7 @@ export default function App() {
                     style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 60 }}
                     onClick={() => { if (currentDoc) setShowList(false) }}
                   />
-                  <div style={{
+                  <div className="doc-drawer" style={{
                     position: 'fixed', left: 0, top: 46, bottom: 0, zIndex: 61,
                     width: Math.min(340, Math.max(260, Math.round(vw * 0.85))),
                     boxShadow: '2px 0 16px rgba(0,0,0,.35)', display: 'flex',
