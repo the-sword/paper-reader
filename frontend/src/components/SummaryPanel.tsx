@@ -31,6 +31,7 @@ export default function SummaryPanel() {
 
   const [history, setHistory] = useState<SummaryItem[]>([])
   const [current, setCurrent] = useState<SummaryItem | null>(null)
+  const [showMoreKinds, setShowMoreKinds] = useState(false)
 
   // ---- 领读教练会话（方案 C：速读卡下方的按目标精读） ----
   const [goals, setGoals] = useState<ReaderGoal[]>([])
@@ -58,9 +59,15 @@ export default function SummaryPanel() {
     setSessions([])
     setActiveSessionId(null)
     setCoachError(null)
+    setShowMoreKinds(false)
     if (!currentDoc) { setHistory([]); return }
     void api.listSummaries(currentDoc.id)
-      .then((r) => setHistory(r.summaries))
+      .then((r) => {
+        setHistory(r.summaries)
+        // 方案 C 动线：有缓存速读卡则直接展示，紧接着就是目标分流
+        const card = r.summaries.find((h) => h.kind === 'socratic_card')
+        if (card) setCurrent(card)
+      })
       .catch(() => setHistory([]))
     void api.readerSessions(currentDoc.id)
       .then((r) => setSessions(r.sessions))
@@ -85,7 +92,7 @@ export default function SummaryPanel() {
     } catch { /* 忽略 */ }
   }
 
-  const generate = async () => {
+  const generate = async (kind: string) => {
     if (!currentDoc) return
     setError(null)
     setCurrent(null)
@@ -97,8 +104,8 @@ export default function SummaryPanel() {
 
     try {
       const { job_id } = await api.startSummary(
-        currentDoc.id, activeKind,
-        activeKind === 'qa' ? question : undefined,
+        currentDoc.id, kind,
+        kind === 'qa' ? question : undefined,
       )
       setJobId(job_id)
 
@@ -170,9 +177,11 @@ export default function SummaryPanel() {
 
   const labelOf = (k: string) => kinds.find((x) => x.value === k)?.label ?? k
 
-  // 当前是否有速读卡可看（正在查看的或历史里最新的一张）
+  // 速读卡是主流程；其余总结类型收进「更多总结方式」
+  const otherKinds = kinds.filter((k) => k.value !== 'socratic_card')
+  const card = history.find((h) => h.kind === 'socratic_card') ?? null
   const cardShown = current?.kind === 'socratic_card'
-    || (!current && history.some((h) => h.kind === 'socratic_card'))
+    || (!current && card !== null)
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null
 
@@ -240,45 +249,22 @@ export default function SummaryPanel() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* 控制区 */}
+      {/* 控制区：主流程是速读卡，其余总结方式折叠 */}
       <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
-          {kinds.map((k) => (
-            <button
-              key={k.value}
-              onClick={() => setActiveKind(k.value)}
-              disabled={running}
-              style={{
-                fontSize: 11, padding: '4px 9px', borderRadius: 12,
-                cursor: running ? 'not-allowed' : 'pointer',
-                opacity: running && activeKind !== k.value ? 0.5 : 1,
-                border: `1px solid ${activeKind === k.value ? 'var(--accent)' : 'var(--border)'}`,
-                background: activeKind === k.value ? 'var(--accent)' : 'transparent',
-                color: activeKind === k.value ? '#fff' : 'var(--fg)',
-              }}
-            >{k.label}</button>
-          ))}
-        </div>
-
-        {activeKind === 'qa' && (
-          <textarea
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            rows={2}
-            disabled={running}
-            placeholder="针对这篇论文提问，例如：训练用了什么数据和超参数？"
-            style={{ width: '100%', fontSize: 12, padding: '6px 8px', marginBottom: 8, resize: 'vertical' }}
-          />
-        )}
-
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           {!running ? (
-            <button
-              className="btn-primary"
-              style={{ fontSize: 12 }}
-              onClick={() => void generate()}
-              disabled={activeKind === 'qa' && !question.trim()}
-            >生成总结</button>
+            <>
+              <button
+                className="btn-primary"
+                style={{ fontSize: 12 }}
+                onClick={() => void generate('socratic_card')}
+              >{card ? '重新生成速读卡' : '生成一页纸速读卡'}</button>
+              <button
+                className="btn-ghost"
+                style={{ fontSize: 11, color: 'var(--fg-muted)' }}
+                onClick={() => setShowMoreKinds((v) => !v)}
+              >{showMoreKinds ? '收起更多 ▴' : '更多总结方式 ▾'}</button>
+            </>
           ) : (
             <>
               <button
@@ -293,6 +279,40 @@ export default function SummaryPanel() {
             </>
           )}
         </div>
+
+        {showMoreKinds && !running && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+              {otherKinds.map((k) => (
+                <button
+                  key={k.value}
+                  onClick={() => setActiveKind(k.value)}
+                  style={{
+                    fontSize: 11, padding: '4px 9px', borderRadius: 12, cursor: 'pointer',
+                    border: `1px solid ${activeKind === k.value ? 'var(--accent)' : 'var(--border)'}`,
+                    background: activeKind === k.value ? 'var(--accent)' : 'transparent',
+                    color: activeKind === k.value ? '#fff' : 'var(--fg)',
+                  }}
+                >{k.label}</button>
+              ))}
+            </div>
+            {activeKind === 'qa' && (
+              <textarea
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                rows={2}
+                placeholder="针对这篇论文提问，例如：训练用了什么数据和超参数？"
+                style={{ width: '100%', fontSize: 12, padding: '6px 8px', marginBottom: 6, resize: 'vertical' }}
+              />
+            )}
+            <button
+              className="btn-ghost"
+              style={{ fontSize: 11 }}
+              onClick={() => void generate(activeKind)}
+              disabled={activeKind === 'qa' && !question.trim()}
+            >生成「{labelOf(activeKind)}」</button>
+          </div>
+        )}
 
         {running && (
           <div style={{ height: 3, background: 'var(--border)', borderRadius: 2, marginTop: 8 }}>
@@ -332,18 +352,21 @@ export default function SummaryPanel() {
         ) : (
           !running && (
             <div className="hint" style={{ padding: '20px 4px', lineHeight: 1.7 }}>
-              选择上方的总结类型，点击「生成总结」。
-              <br />结果会保存在本地数据库中，随时可回看。
+              点击「生成一页纸速读卡」，先快速定位这篇论文值不值得精读。
+              <br />卡片生成后可按目标（组会/复现/综述…）继续领读。
             </div>
           )
         )}
 
-        {/* 领读教练：有速读卡时显示目标分流与会话 */}
+        {/* 领读教练：速读卡之后的目标分流，视觉上与卡片同一条流 */}
         {cardShown && (
-          <div style={{ marginTop: 22, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>按你的目标继续精读</div>
+          <div style={{
+            marginTop: 14, padding: '10px 12px', borderRadius: 8,
+            border: '1px dashed var(--border)', background: 'var(--bg-card, transparent)',
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>继续精读 · 选一个目标</div>
             <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 8 }}>
-              选一个方向，教练按对应路线带你走（多轮对话，历史保留）
+              教练按对应路线带读，可追问（多轮对话，历史保留）
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
               {goals.map((g) => {
