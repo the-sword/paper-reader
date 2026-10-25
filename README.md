@@ -102,7 +102,25 @@ paper-reader/
 | 划词翻译 | 选中文字 → 气泡 → 手动点「翻译」；**严格限制单段**，跨段自动截断 |
 | 清除译文缓存并重翻 | 按需切换引擎重翻（机翻快、AI 准，AI 会保留人名原文） |
 | AI 总结 | 7 种类型（**领读·一页纸速读卡 / 领读·苏格拉底精读**：证据分级、论证链评估、图表三问、费曼复述模板 / 概览 / 方法 / 贡献 / 局限 / 自由提问），后台任务执行，**可随时取消**，流式显示进度 |
+| 领读教练 | PaperSocratic Reader 方案 C（见下节）：速读卡 + 按目标精读的多轮会话 |
 | 术语表 | 每行 `英文=中文`，翻译时注入 prompt 保证全文译名一致 |
+
+### 领读教练（PaperSocratic Reader · 方案 C）
+
+UI 设计稿见 `docs/socratic-reader-ui.svg`。思路：**静态速读卡 + 按目标精读会话**——
+
+- **速读卡**（`socratic_card`）：一次性生成、存库可复用，打开即看，零交互成本
+- **精读会话**：速读卡下方出现目标 chips（快速了解 / 组会汇报 / 方法复现 / 写综述 / 项目评估），选一个方向即开多轮对话。教练按阶段推进：速读卡回顾 → 结构拆解 → 方法/图表三问 → 论证链评估 → 批判 → 费曼复述纠偏；每轮结尾给追问，读者可随时打断、换目标
+- 会话按「文献 + 目标」落库（`reader_sessions`/`reader_messages`），同目标续聊、换目标并行，关闭再开历史还在
+
+实现位置：
+
+- `backend/app/services/reader_coach.py`：目标路由 `GOALS`、system prompt 组装（语料 + 路线 + 苏格拉底门禁）、会话/消息落库
+- `backend/app/api/phase3.py`：`/reading/reader/goals`、`/reader/{doc}/chat`、`/reader/{doc}/sessions`、`DELETE /reader/session/{id}`
+- `frontend/src/components/SummaryPanel.tsx`：速读卡下方的目标 chips + 会话线程
+- 语料复用 `summarize._build_corpus`（图表仅 caption，受 24k 字符截断）
+
+后续升级到方案 B（完整会话式领读）只需：会话面板独立成主视图 + 显式阶段状态机，会话底座不变。
 
 ### 个性化（全部持久化）
 翻译方式、显示模式、翻译引擎、上次视图、阅读主题、字号、页宽、行高、三栏宽度、两侧栏显隐——**全部记住，打开就是上次的样子**。

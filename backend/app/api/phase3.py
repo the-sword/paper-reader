@@ -15,6 +15,7 @@ from ..services import glossary_cache as term_svc
 from ..services import library
 from ..services import prefs as prefs_svc
 from ..services import summarize as sum_svc
+from ..services import reader_coach as coach_svc
 
 router = APIRouter()
 
@@ -141,6 +142,47 @@ def list_summaries(doc_id: str) -> dict[str, Any]:
 @router.delete("/summary/item/{summary_id}")
 def delete_summary(summary_id: str) -> dict[str, Any]:
     sum_svc.delete_summary(summary_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# 领读教练会话（方案 C：速读卡 + 按目标精读多轮对话）
+# ---------------------------------------------------------------------------
+
+class ReaderChatReq(BaseModel):
+    session_id: str | None = None
+    goal: str | None = None
+    message: str | None = None
+
+
+@router.get("/reader/goals")
+def reader_goals() -> dict[str, Any]:
+    return {"goals": [{"value": k, "label": v["label"]} for k, v in coach_svc.GOALS.items()]}
+
+
+@router.post("/reader/{doc_id}/chat")
+def reader_chat(doc_id: str, body: ReaderChatReq) -> dict[str, Any]:
+    """无 session_id 且带 goal → 建会话并生成开场回复；带 session_id+message → 续聊。"""
+    if not library.get_document(doc_id):
+        raise HTTPException(404, "文献不存在")
+    try:
+        return coach_svc.chat(doc_id, body.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, str(e)) from e
+
+
+@router.get("/reader/{doc_id}/sessions")
+def reader_sessions(doc_id: str) -> dict[str, Any]:
+    if not library.get_document(doc_id):
+        raise HTTPException(404, "文献不存在")
+    return {"sessions": coach_svc.list_sessions(doc_id)}
+
+
+@router.delete("/reader/session/{session_id}")
+def reader_delete_session(session_id: str) -> dict[str, Any]:
+    coach_svc.delete_session(session_id)
     return {"ok": True}
 
 

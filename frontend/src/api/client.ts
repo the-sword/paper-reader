@@ -273,6 +273,18 @@ export interface TermResult {
   meta: Record<string, unknown>
 }
 export interface SummaryKind { value: string; label: string }
+export interface ReaderGoal { value: string; label: string }
+export interface ReaderMessage {
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+}
+export interface ReaderSession {
+  id: string
+  goal: string
+  created_at: string
+  messages: ReaderMessage[]
+}
 export interface SummaryItem {
   id: string
   document_id: string
@@ -425,6 +437,17 @@ export const api = {
     req<{ summaries: SummaryItem[] }>(`/reading/summary/${docId}`),
   deleteSummary: (id: string) =>
     req<{ ok: boolean }>(`/reading/summary/item/${id}`, { method: 'DELETE' }),
+
+  // ---- 领读教练会话（方案 C：速读卡 + 按目标精读） ----
+  readerGoals: () => req<{ goals: ReaderGoal[] }>('/reading/reader/goals'),
+  readerChat: (docId: string, body: { session_id?: string; goal?: string; message?: string }) =>
+    req<{ session_id: string; goal: string; reply: string }>(
+      `/reading/reader/${docId}/chat`,
+      { method: 'POST', body: JSON.stringify(body) }),
+  readerSessions: (docId: string) =>
+    req<{ sessions: ReaderSession[] }>(`/reading/reader/${docId}/sessions`),
+  deleteReaderSession: (sessionId: string) =>
+    req<{ ok: boolean }>(`/reading/reader/session/${sessionId}`, { method: 'DELETE' }),
 
   // ---- 备份 ----
   getBackupConfig: () => req<WebDAVConfig>('/reading/backup/config'),

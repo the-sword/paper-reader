@@ -195,7 +195,7 @@ def _build_corpus(doc_id: str) -> tuple[str, int]:
     return corpus, len(corpus)
 
 
-def _call_ai(system: str, user: str, cancel_event: Any = None,
+def _call_ai(messages: list[dict[str, str]], cancel_event: Any = None,
              on_progress: Any = None) -> dict[str, Any]:
     """调用 AI 生成总结。
 
@@ -215,10 +215,7 @@ def _call_ai(system: str, user: str, cancel_event: Any = None,
     url = cfg["base_url"].rstrip("/") + "/chat/completions"
     payload = {
         "model": cfg.get("model") or "gpt-3.5-turbo",
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": messages,
         "temperature": 0.3,
         "stream": True,
     }
@@ -325,7 +322,10 @@ def generate(doc_id: str, kind: str, question: str | None = None,
         system = tpl["system"]
         user = f"以下是论文内容：\n\n{corpus}"
 
-    res = _call_ai(system, user, cancel_event=cancel_event, on_progress=on_progress)
+    res = _call_ai(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        cancel_event=cancel_event, on_progress=on_progress,
+    )
 
     if cancel_event is not None and cancel_event.is_set():
         raise ai_mod.Cancelled("已取消")

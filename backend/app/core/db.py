@@ -115,6 +115,24 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+-- 领读教练会话（方案 C：速读卡下方的按目标精读多轮对话）
+CREATE TABLE IF NOT EXISTS reader_sessions (
+  id          TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  goal        TEXT NOT NULL,           -- quick|group|reproduce|survey|project
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reader_sessions_doc ON reader_sessions(document_id);
+
+CREATE TABLE IF NOT EXISTS reader_messages (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL REFERENCES reader_sessions(id) ON DELETE CASCADE,
+  role       TEXT NOT NULL,            -- 'user' | 'assistant'
+  content    TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reader_messages_session ON reader_messages(session_id);
+
 -- 划词翻译缓存（跨文献复用）
 CREATE TABLE IF NOT EXISTS term_cache (
   key        TEXT PRIMARY KEY,

@@ -1,0 +1,248 @@
+<svg width="1560" height="1180" viewBox="0 0 1560 1180" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif">
+  <desc>领读功能重设计稿：方案 C（静态速读卡 + 按目标精读入口）与方案 B（会话式领读教练）对比。</desc>
+
+  <defs>
+    <filter id="fFrame" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="6" stdDeviation="12" flood-color="#0F172A" flood-opacity="0.08"/>
+    </filter>
+    <filter id="fCard" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#0F172A" flood-opacity="0.06"/>
+    </filter>
+    <g id="iBolt" fill="#444CE7">
+      <polygon points="1,-6 -4.5,1 -0.8,1 -1,6 4.5,-1 0.8,-1"/>
+    </g>
+    <g id="iChat" stroke="#444CE7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M -5,-3.5 L 4,-3.5 A 2,2 0 0 1 6,-1.5 L 6,1.5 A 2,2 0 0 1 4,3.5 L -1,3.5 L -4,6 L -4,3.5 A 2,2 0 0 1 -6,1.5 L -6,-1.5 A 2,2 0 0 1 -4,-3.5 Z"/>
+    </g>
+    <g id="iCard" stroke="#77808F" stroke-width="1.5" stroke-linecap="round" fill="none">
+      <rect x="-5" y="-6" width="10" height="12" rx="1.5"/>
+      <path d="M -2.5,-2.5 L 2.5,-2.5"/><path d="M -2.5,0.5 L 2.5,0.5"/><path d="M -2.5,3.5 L 0.5,3.5"/>
+    </g>
+    <g id="iUser" stroke="#667085" stroke-width="1.5" stroke-linecap="round" fill="none">
+      <circle cx="0" cy="-2.5" r="2.5"/><path d="M -4,5 A 4,4 0 0 1 4,5"/>
+    </g>
+    <g id="iCoach" fill="#444CE7">
+      <circle cx="0" cy="-2.8" r="2.6"/><path d="M -4.5,6 A 4.5,4.5 0 0 1 4.5,6 Z"/>
+    </g>
+    <g id="iCheck" stroke="#12B76A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M -3.5,0.5 L -1,3 L 4,-3.5"/>
+    </g>
+    <g id="iChevR" stroke="#98A2B3" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M -1.5,-4 L 2.5,0 L -1.5,4"/>
+    </g>
+    <g id="iArrow" stroke="#667085" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M 0,0 L 14,0"/><path d="M 10,-4 L 14,0 L 10,4"/>
+    </g>
+  </defs>
+
+  <!-- ==================== 画板底 ==================== -->
+  <rect width="1560" height="1180" fill="#E9ECF2"/>
+
+  <text x="60" y="58" font-size="26" font-weight="700" fill="#101828">领读功能重设计：PaperSocratic Reader 两种落地形态</text>
+  <text x="60" y="84" font-size="14" fill="#667085">共同基座：corpus 注入（segments 全文 + 图表 caption）｜ 差异点：一次成型文档 vs 分阶段会话</text>
+
+  <!-- ================================================================ -->
+  <!-- 左半：方案 C（混合）                                                -->
+  <!-- ================================================================ -->
+  <rect x="60" y="110" width="700" height="890" rx="14" fill="#FFFFFF" filter="url(#fFrame)"/>
+
+  <text x="92" y="150" font-size="18" font-weight="700" fill="#101828">方案 C · 速读卡 + 精读入口</text>
+  <rect x="92" y="164" width="296" height="22" rx="11" fill="#EEF4FF"/>
+  <text x="104" y="179" font-size="11.5" font-weight="600" fill="#444CE7">一次性生成 · 可缓存 · 按需展开会话</text>
+
+  <!-- 面板外框：右栏 AI 总结 -->
+  <rect x="92" y="206" width="636" height="560" rx="10" fill="#F8FAFC" stroke="#E4E7EC"/>
+  <!-- 面板头部 -->
+  <rect x="92" y="206" width="636" height="40" rx="10" fill="#FFFFFF"/>
+  <line x1="92" y1="246" x2="728" y2="246" stroke="#E4E7EC"/>
+  <use href="#iCard" transform="translate(112,226)"/>
+  <text x="126" y="231" font-size="13" font-weight="600" fill="#101828">领读 · 一页纸速读卡</text>
+  <rect x="612" y="216" width="104" height="20" rx="10" fill="#ECFDF3"/>
+  <text x="622" y="230" font-size="11" fill="#027A48">已生成 · 可重读</text>
+
+  <!-- 速读卡内容 -->
+  <g font-size="11.5" fill="#344054">
+    <text x="112" y="272" font-weight="700" fill="#101828" font-size="12.5">一句话问题</text>
+    <text x="112" y="290">单目 SLAM 的 BA 求解在嵌入式端如何兼顾精度与实时性</text>
+
+    <text x="112" y="316" font-weight="700" fill="#101828" font-size="12.5">作者认为的缺口</text>
+    <text x="112" y="334">现有方法 CPU 求解效率不足，GPU 方案精度下降【作者声称】</text>
+
+    <text x="112" y="360" font-weight="700" fill="#101828" font-size="12.5">核心方法</text>
+    <text x="112" y="378">平方根信息滤波 + GPU 块稀疏 Schur 补求解</text>
+
+    <text x="112" y="404" font-weight="700" fill="#101828" font-size="12.5">最强证据【中证据】</text>
+    <text x="112" y="422">EuRoC 平均 ATE 0.044m（与 ORB-SLAM3 持平），耗时降 42%*</text>
+    <text x="112" y="438" font-size="10.5" fill="#B42318">* 注意：MH_05 等困难序列上为特定序列最好结果，非全程平均</text>
+
+    <text x="112" y="464" font-weight="700" fill="#101828" font-size="12.5">最大局限</text>
+    <text x="112" y="482">仅单目 EuRoC 验证，未测室外/弱纹理场景（论文未提供）</text>
+
+    <text x="112" y="508" font-weight="700" fill="#101828" font-size="12.5">价值判断</text>
+    <text x="112" y="526" fill="#444CE7" font-weight="600">值得精读 —— 适合：做 VIO/SLAM 落地、关注 GPU 加速的人</text>
+  </g>
+
+  <!-- 分割线 -->
+  <line x1="112" y1="550" x2="708" y2="550" stroke="#E4E7EC"/>
+  <text x="112" y="574" font-size="12" font-weight="600" fill="#101828">按你的目标继续精读</text>
+  <text x="112" y="592" font-size="11" fill="#667085">选一个方向，教练按对应路线带你走（多轮）</text>
+
+  <!-- 目标分流 chips -->
+  <g font-size="12" font-weight="600">
+    <rect x="112" y="604" width="100" height="30" rx="15" fill="#FFFFFF" stroke="#D0D5DD"/>
+    <text x="138" y="623" fill="#344054">组会汇报</text>
+    <rect x="224" y="604" width="100" height="30" rx="15" fill="#FFFFFF" stroke="#D0D5DD"/>
+    <text x="250" y="623" fill="#344054">方法复现</text>
+    <rect x="336" y="604" width="100" height="30" rx="15" fill="#FFFFFF" stroke="#D0D5DD"/>
+    <text x="362" y="623" fill="#344054">写综述</text>
+    <rect x="448" y="604" width="118" height="30" rx="15" fill="#FFFFFF" stroke="#D0D5DD"/>
+    <text x="472" y="623" fill="#344054">项目评估</text>
+    <rect x="578" y="604" width="130" height="30" rx="15" fill="#444CE7"/>
+    <use href="#iBolt" transform="translate(596,619)"/>
+    <text x="608" y="623" fill="#FFFFFF">快速了解</text>
+  </g>
+
+  <!-- 展开后的精读会话区（灰显=按需展开） -->
+  <rect x="112" y="650" width="596" height="100" rx="8" fill="#FFFFFF" stroke="#E4E7EC" stroke-dasharray="4 3" opacity="0.75"/>
+  <text x="128" y="676" font-size="11.5" fill="#667085">选中目标后在此展开精读会话：</text>
+  <text x="128" y="694" font-size="11" fill="#98A2B3">结构拆解 → 方法/图表三问 → 论证链 → 复述检验（每步可追问）</text>
+  <rect x="128" y="706" width="200" height="24" rx="12" fill="#F2F4F7"/>
+  <text x="140" y="722" font-size="11" fill="#667085">先从哪一部分开始？</text>
+
+  <!-- 方案C 调用链 -->
+  <rect x="92" y="790" width="636" height="190" rx="10" fill="#F9FAFB" stroke="#E4E7EC"/>
+  <text x="112" y="818" font-size="12.5" font-weight="700" fill="#101828">调用链</text>
+  <g font-size="11" fill="#475467">
+    <rect x="112" y="830" width="150" height="30" rx="6" fill="#FFFFFF" stroke="#E4E7EC"/>
+    <text x="124" y="849">打开文献 → 卡片</text>
+    <use href="#iArrow" transform="translate(268,845)"/>
+    <rect x="290" y="830" width="170" height="30" rx="6" fill="#FFFFFF" stroke="#E4E7EC"/>
+    <text x="300" y="849">1 次 LLM 调用（可缓存）</text>
+    <use href="#iArrow" transform="translate(466,845)"/>
+    <rect x="488" y="830" width="220" height="30" rx="6" fill="#EEF4FF" stroke="#B2CCFF"/>
+    <text x="500" y="849" fill="#444CE7">点目标 → 进入精读会话 ↓</text>
+
+    <rect x="112" y="876" width="596" height="30" rx="6" fill="#FFFFFF" stroke="#E4E7EC"/>
+    <text x="124" y="895">精读会话：复用 qa 接口升级为多轮（corpus 入 system，按目标挑阶段 prompt）</text>
+    <rect x="112" y="916" width="596" height="30" rx="6" fill="#FFFFFF" stroke="#E4E7EC"/>
+    <text x="124" y="935">每轮只送相关阶段材料（图表段按需取全，绕开 24k 截断）</text>
+  </g>
+
+  <text x="92" y="1016" font-size="11.5" fill="#667085">优点：首屏零等待感、卡片可复用；精读按目标只烧需要的 token</text>
+  <text x="92" y="1036" font-size="11.5" fill="#667085">改动量：socratic_card 已存在，加「目标 chips + 会话区」即可</text>
+
+  <!-- ================================================================ -->
+  <!-- 右半：方案 B（会话式）                                              -->
+  <!-- ================================================================ -->
+  <rect x="800" y="110" width="700" height="890" rx="14" fill="#FFFFFF" filter="url(#fFrame)"/>
+
+  <text x="832" y="150" font-size="18" font-weight="700" fill="#101828">方案 B · 会话式领读教练</text>
+  <rect x="832" y="164" width="296" height="22" rx="11" fill="#F4EBFF"/>
+  <text x="844" y="179" font-size="11.5" font-weight="600" fill="#6941C6">完整领读体验 · 阶段推进 · 复述纠偏</text>
+
+  <!-- 面板外框：右栏 领读教练 -->
+  <rect x="832" y="206" width="636" height="560" rx="10" fill="#F8FAFC" stroke="#E4E7EC"/>
+  <rect x="832" y="206" width="636" height="40" rx="10" fill="#FFFFFF"/>
+  <line x1="832" y1="246" x2="1468" y2="246" stroke="#E4E7EC"/>
+  <use href="#iChat" transform="translate(852,226)"/>
+  <text x="866" y="231" font-size="13" font-weight="600" fill="#101828">领读教练 · PaperSocratic Reader</text>
+  <text x="1440" y="231" font-size="11" fill="#98A2B3">阶段 2/6</text>
+
+  <!-- 会话流 -->
+  <!-- 教练消息：开场 -->
+  <use href="#iCoach" transform="translate(852,272)"/>
+  <rect x="872" y="256" width="560" height="76" rx="8" fill="#FFFFFF" stroke="#E4E7EC"/>
+  <g font-size="11.5" fill="#344054">
+    <text x="884" y="274" font-weight="600">这是《RootSLAM》的一页纸速读卡：</text>
+    <text x="884" y="290">问题：嵌入式单目 SLAM 的 BA 精度-效率取舍 ｜ 缺口：GPU 方案掉精度</text>
+    <text x="884" y="306">方法：平方根滤波 + GPU 稀疏求解 ｜ 价值判断：值得精读</text>
+    <text x="884" y="322" fill="#444CE7">想按哪个目标精读？</text>
+  </g>
+  <!-- 目标 chips（消息内） -->
+  <g font-size="10.5" font-weight="600">
+    <rect x="884" y="338" width="76" height="22" rx="11" fill="#F2F4F7"/><text x="902" y="353" fill="#475467">组会</text>
+    <rect x="966" y="338" width="76" height="22" rx="11" fill="#F2F4F7"/><text x="984" y="353" fill="#475467">复现</text>
+    <rect x="1048" y="338" width="76" height="22" rx="11" fill="#F2F4F7"/><text x="1066" y="353" fill="#475467">综述</text>
+    <rect x="1130" y="338" width="92" height="22" rx="11" fill="#F2F4F7"/><text x="1146" y="353" fill="#475467">项目评估</text>
+  </g>
+
+  <!-- 用户消息 -->
+  <rect x="1104" y="376" width="328" height="30" rx="8" fill="#444CE7"/>
+  <text x="1120" y="395" font-size="11.5" fill="#FFFFFF">组会汇报，下周要讲这篇</text>
+  <use href="#iUser" transform="translate(1448,391)"/>
+
+  <!-- 教练消息：组会路线 -->
+  <use href="#iCoach" transform="translate(852,432)"/>
+  <rect x="872" y="416" width="560" height="104" rx="8" fill="#FFFFFF" stroke="#E4E7EC"/>
+  <g font-size="11.5" fill="#344054">
+    <text x="884" y="434" font-weight="600">组会路线（阶段 3-5）：先看论证链 ——</text>
+    <text x="884" y="452">因为 PCG 求解耗时占比 60%+【强证据：表3】，作者做 GPU 稀疏化；</text>
+    <text x="884" y="468">但 Schur 补在 MH 序列上误差上界变松【弱证据：仅2组数据】…</text>
+    <text x="884" y="486" fill="#101828">可能被问的 3 个问题：①和 VINS-Mono 公平吗？②真机功耗？③…</text>
+    <text x="884" y="506" fill="#444CE7">先用 3 分钟复述模板试试：一句话问题___；核心方法___；…</text>
+  </g>
+
+  <!-- 用户消息 -->
+  <rect x="1104" y="536" width="328" height="30" rx="8" fill="#444CE7"/>
+  <text x="1120" y="555" font-size="11.5" fill="#FFFFFF">和 VINS-Mono 比公平在哪/哪不公平？</text>
+  <use href="#iUser" transform="translate(1448,551)"/>
+
+  <!-- 教练消息：公平性 -->
+  <use href="#iCoach" transform="translate(852,592)"/>
+  <rect x="872" y="576" width="560" height="88" rx="8" fill="#FFFFFF" stroke="#E4E7EC"/>
+  <g font-size="11.5" fill="#344054">
+    <text x="884" y="594" font-weight="600">公平性检查（阶段 5 的反问环节）：</text>
+    <text x="884" y="612">对齐：同 EuRoC、同单目、同在线因果设定 ✓</text>
+    <text x="884" y="628">不对齐：VINS 结果取自其论文复现版，调参预算未知【论文未提供】</text>
+    <text x="884" y="646" fill="#444CE7">追问：你能向听众解释为什么 MH_05 单列出来吗？</text>
+  </g>
+
+  <!-- 输入框 -->
+  <rect x="852" y="690" width="596" height="56" rx="10" fill="#FFFFFF" stroke="#D0D5DD"/>
+  <text x="868" y="712" font-size="12" fill="#98A2B3">回答教练的问题 / 追问论文细节…</text>
+  <rect x="868" y="722" width="120" height="18" rx="9" fill="#F2F4F7"/>
+  <text x="878" y="735" font-size="10" fill="#667085">跳过此阶段</text>
+  <rect x="996" y="722" width="150" height="18" rx="9" fill="#F2F4F7"/>
+  <text x="1006" y="735" font-size="10" fill="#667085">给我看三分钟复述模板</text>
+  <rect x="1372" y="700" width="64" height="36" rx="8" fill="#444CE7"/>
+  <text x="1388" y="723" font-size="13" fill="#FFFFFF" font-weight="600">发送</text>
+
+  <!-- 方案B 调用链 -->
+  <rect x="832" y="790" width="636" height="190" rx="10" fill="#F9FAFB" stroke="#E4E7EC"/>
+  <text x="852" y="818" font-size="12.5" font-weight="700" fill="#101828">调用链</text>
+  <g font-size="11" fill="#475467">
+    <rect x="852" y="830" width="180" height="30" rx="6" fill="#FFFFFF" stroke="#E4E7EC"/>
+    <text x="862" y="849">POST /reader/session 开局</text>
+    <use href="#iArrow" transform="translate(1038,845)"/>
+    <rect x="1060" y="830" width="190" height="30" rx="6" fill="#FFFFFF" stroke="#E4E7EC"/>
+    <text x="1070" y="849">教练发速读卡 + 目标chips</text>
+    <use href="#iArrow" transform="translate(1256,845)"/>
+    <rect x="1278" y="830" width="190" height="30" rx="6" fill="#F4EBFF" stroke="#D6BBFB"/>
+    <text x="1288" y="849" fill="#6941C6">用户选目标 → 阶段推进</text>
+
+    <rect x="852" y="876" width="616" height="30" rx="6" fill="#FFFFFF" stroke="#E4E7EC"/>
+    <text x="864" y="895">POST /reader/session/{id}/turn：带历史的多轮调用，服务端按阶段挑 prompt</text>
+    <rect x="852" y="916" width="616" height="30" rx="6" fill="#FFFFFF" stroke="#E4E7EC"/>
+    <text x="864" y="935">阶段状态机存库（session 表）：速览→分流→拆解→论证链→复述，可中途退出续读</text>
+  </g>
+
+  <text x="832" y="1016" font-size="11.5" fill="#667085">优点：最贴近 Skill 原意——追问、复述纠偏、随时改目标</text>
+  <text x="832" y="1036" font-size="11.5" fill="#667085">改动量：新增 session/turn API + 会话面板组件 + 阶段状态机</text>
+
+  <!-- ==================== 底部对比结论 ==================== -->
+  <rect x="60" y="1030" width="700" height="120" rx="12" fill="#FFFFFF" filter="url(#fCard)"/>
+  <text x="84" y="1062" font-size="13" font-weight="700" fill="#101828">对比结论</text>
+  <g font-size="11.5" fill="#475467">
+    <use href="#iCheck" transform="translate(92,1082)"/><text x="106" y="1087">方案 C：实现快、省钱；「静态卡 + 可追问会话」已覆盖 80% 场景</text>
+    <use href="#iCheck" transform="translate(92,1106)"/><text x="106" y="1111">方案 B：体验完整；适合主力使用模式，但要做会话状态机</text>
+    <use href="#iCheck" transform="translate(92,1130)"/><text x="106" y="1135">建议：C 先落地，会话底座（corpus system prompt）与 B 共用</text>
+  </g>
+
+  <rect x="800" y="1030" width="700" height="120" rx="12" fill="#FFFFFF" filter="url(#fCard)"/>
+  <text x="824" y="1062" font-size="13" font-weight="700" fill="#101828">两者共需修复</text>
+  <g font-size="11.5" fill="#475467">
+    <text x="824" y="1087">· corpus 24k 截断 → 按阶段分段送（精读优先保方法/实验/局限段）</text>
+    <text x="824" y="1111">· 图表只有 caption → 关键图表段补图注上下文；后续可接视觉模型看图</text>
+    <text x="824" y="1135">· user_goal 进 prompt →「比较公平性/平均vs最好」门禁按目标启停</text>
+  </g>
+</svg>
