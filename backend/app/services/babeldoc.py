@@ -85,6 +85,7 @@ _APPENDIX_DESIG_RE = re.compile(r"([A-Za-z0-9]{1,3}(?:\.\d+)*)\s*([:：.．\-–
 
 _patch_lock = threading.Lock()
 _patch_applied = False
+_patch_applied_xobj = False
 
 
 def _skip_layout_set() -> frozenset[str]:
@@ -207,6 +208,65 @@ def _apply_skip_translation_patch() -> None:
             )
 
 
+def _apply_xobj_recursion_guard() -> None:
+    """给 babeldoc 内置 pdfminer 的 do_Do 加「循环引用 + 深度」守卫。
+
+    pdfminer 处理 Form XObject 走 Python 递归（do_Do → render_contents），
+    无深度上限：PDF 里 XObject 自引用或超深嵌套会抛
+    RecursionError（如 "maximum recursion depth exceeded in comparison"）。
+    这里在 device（dup interpreter 间共享）上挂调用链栈：
+    同一 XObject 对象再次进入或深度超限 → 记警告并跳过该子树。
+
+    pdf2zh 用 multiprocessing.Process 跑 babeldoc，Linux fork 启动方式
+    会继承本补丁。
+    """
+    global _patch_applied_xobj
+    with _patch_lock:
+        if _patch_applied_xobj:
+            return
+        try:
+            import logging
+
+            from babeldoc.pdfminer.pdfinterp import PDFPageInterpreter
+            from babeldoc.pdfminer.psparser import literal_name
+            from babeldoc.pdfminer.pdftypes import stream_value
+
+            # 正常论文 XObject 嵌套约数层；给足余量又远低于递归上限
+            max_depth = int(os.environ.get("PAPER_READER_MAX_XOBJ_DEPTH", "32"))
+            orig_do = PDFPageInterpreter.do_Do
+            log = logging.getLogger(__name__)
+
+            def _do_wrapper(self, xobjid_arg, *args, **kwargs):
+                dev = self.device
+                stack = getattr(dev, "_pr_xobj_stack", None)
+                if stack is None:
+                    stack = dev._pr_xobj_stack = []
+                # 按对象身份判环（同名 XObject 在不同资源域下可合法复用）
+                try:
+                    key = id(stream_value(
+                        self.xobjmap.get(literal_name(xobjid_arg))))
+                except Exception:  # noqa: BLE001 - 资源缺失交给原逻辑报错
+                    key = None
+                if (key is not None and key in stack) or len(stack) >= max_depth:
+                    log.warning(
+                        "跳过循环/过深嵌套的 XObject: %r（深度 %d）",
+                        xobjid_arg, len(stack),
+                    )
+                    return
+                stack.append(key)
+                try:
+                    return orig_do(self, xobjid_arg, *args, **kwargs)
+                finally:
+                    stack.pop()
+
+            PDFPageInterpreter.do_Do = _do_wrapper
+            _patch_applied_xobj = True
+        except Exception as exc:  # noqa: BLE001 - 补丁失败仅告警
+            logging.getLogger(__name__).warning(
+                "XObject 递归守卫补丁未生效（babeldoc 版本不兼容？）: %s", exc
+            )
+
+
 def is_available() -> tuple[bool, str]:
     """检查 BabelDOC 是否已安装。返回 (可用, 原因)。
 
@@ -277,6 +337,8 @@ async def translate_pdf_async(
 
     # 跳过标题/参考文献（可在环境变量里关闭/自定义）
     _apply_skip_translation_patch()
+    # XObject 循环引用/深嵌套守卫（防 RecursionError）
+    _apply_xobj_recursion_guard()
 
     from pdf2zh_next import high_level
 

@@ -1,6 +1,7 @@
 """阶段三 API：划词翻译、AI 总结、WebDAV 备份。"""
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any
 
@@ -18,6 +19,7 @@ from ..services import summarize as sum_svc
 from ..services import reader_coach as coach_svc
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +389,8 @@ def start_babeldoc(doc_id: str, body: BabelDocReq) -> dict[str, Any]:
 
             if isinstance(e, Cancelled) or job.cancel.is_set():
                 raise
+            # babeldoc 子进程回传的错误只有 str，把 traceback 落日志便于定位
+            logger.exception("双语 PDF 生成失败 doc=%s", doc_id)
             raise RuntimeError(str(e)) from e
 
     job = jobs_svc.start("babeldoc", _work)
