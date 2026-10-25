@@ -83,9 +83,9 @@ def _get(url: str, params: dict[str, Any] | None = None,
 
         last = f"HTTP {r.status_code}"
         if r.status_code == 429:
-            # 限流：退避更久
+            # 限流：arXiv 冷却期较长，退避 15/30/45 秒
             if attempt < retries - 1:
-                time.sleep(5 * (attempt + 1))
+                time.sleep(15 * (attempt + 1))
             continue
         if r.status_code in (500, 502, 503, 504):
             if attempt < retries - 1:
@@ -133,6 +133,32 @@ def _parse_entries(xml: str) -> list[ArxivItem]:
     return items
 
 
+# arXiv 合法字段前缀，白名单内才允许透传（防止标题里的小写词+冒号被误判为字段）
+_ARXIV_FIELDS = ("all", "ti", "au", "abs", "co", "jr", "cat", "rn", "id")
+
+# arXiv ID / abs 链接：新格式 2305.12345v2，旧格式 cs/0501001
+_ID_INPUT_RE = re.compile(
+    r"^(?:https?://arxiv\.org/(?:abs|pdf)/)?"
+    r"(\d{4}\.\d{4,5}(?:v\d+)?|[a-z\-]+(?:\.[a-zA-Z]{2})?/\d{7}(?:v\d+)?)"
+    r"(?:\.pdf)?$",
+    re.I,
+)
+
+
+def _search_once(search_query: str, limit: int, sort_by: str,
+                 sort_order: str) -> list[ArxivItem]:
+    _throttle()
+    r = _get(ARXIV_API, {
+        "search_query": search_query,
+        "max_results": max(1, min(limit, 30)),
+        "sortBy": sort_by,
+        "sortOrder": sort_order,
+    })
+    if getattr(r, "status_code", 0) != 200:
+        raise RuntimeError(f"arXiv 搜索失败：HTTP {getattr(r, 'status_code', '?')}")
+    return _parse_entries(r.text)
+
+
 def search(
     query: str,
     limit: int = 10,
@@ -144,24 +170,37 @@ def search(
 
     field: all | ti（标题） | au（作者） | abs（摘要）
     sort_by: relevance | submittedDate | lastUpdatedDate
+
+    查询策略（实测 arXiv 短语匹配对标点/副标题差异极敏感）：
+      1. 输入是 arXiv ID / abs 链接 → 走 id_list 精确取
+      2. 自带合法字段前缀（ti:/au:/all:…）→ 原样透传
+      3. 普通输入 → 去标点后先短语匹配，空结果则按词 AND 兜底
     """
     q = query.strip()
     if not q:
         return []
 
-    # 用户自己写了字段前缀就原样用
-    search_query = q if re.match(r"^[a-z]+:", q) else f'{field}:"{q}"'
+    m = _ID_INPUT_RE.match(q)
+    if m:
+        meta = fetch_meta(m.group(1))
+        return [meta] if meta else []
 
-    _throttle()
-    r = _get(ARXIV_API, {
-        "search_query": search_query,
-        "max_results": max(1, min(limit, 30)),
-        "sortBy": sort_by,
-        "sortOrder": sort_order,
-    })
-    if getattr(r, "status_code", 0) != 200:
-        raise RuntimeError(f"arXiv 搜索失败：HTTP {getattr(r, 'status_code', '?')}")
-    return [x.to_dict() for x in _parse_entries(r.text)]
+    if re.match(r"^(%s):" % "|".join(_ARXIV_FIELDS), q):
+        queries = [q]
+    else:
+        # 去标点分词：冒号/括号等会破坏 arXiv 查询解析
+        tokens = re.findall(r"[A-Za-z0-9]+", q)[:10]
+        if not tokens:
+            return []
+        queries = [f'{field}:"{" ".join(tokens)}"']
+        if len(tokens) > 1:
+            queries.append("+AND+".join(f"{field}:{t}" for t in tokens))
+
+    for search_query in queries:
+        items = _search_once(search_query, limit, sort_by, sort_order)
+        if items:
+            return [x.to_dict() for x in items]
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -256,10 +295,11 @@ def find_by_doi(doi: str, limit: int = 8) -> dict[str, Any]:
     candidates: list[dict[str, Any]] = []
     if meta and meta.get("title"):
         title = meta["title"]
-        # 先试完整标题，再试截断（arXiv 标题可能有副标题差异）
-        for q in (f'ti:"{title}"', f'ti:"{title[:60]}"'):
+        # 先试完整标题，再试截断（arXiv 标题可能有副标题差异）；
+        # 走 field=ti 让 search() 做标点净化与 AND 兜底
+        for q in (title, title[:60]):
             try:
-                candidates = search(q, limit=limit)
+                candidates = search(q, limit=limit, field="ti")
             except Exception:  # noqa: BLE001
                 candidates = []
             if candidates:
