@@ -10,6 +10,7 @@
  *   透明 DOM 叠在 canvas 上，才能实现「选中原文 → 高亮」和后续的划词翻译。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { clearStaleShellFlag, selfHealStaleShell } from '../lib/staleShell'
 import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { TextLayer } from 'pdfjs-dist'
@@ -186,6 +187,7 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
 
   const [numPages, setNumPages] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [bubble, setBubble] = useState<Bubble | null>(null)
   const [color, setColor] = useState(COLORS[0])
 
@@ -233,6 +235,7 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
+    setLoadError(null)
     setNumPages(0)
     if (hostRef.current) hostRef.current.innerHTML = ''
 
@@ -243,6 +246,7 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
         pdfRef.current = pdf
         setNumPages(pdf.numPages)
         setLoading(false)
+        clearStaleShellFlag()
         try {
           const first = await pdf.getPage(1)
           const base = first.getViewport({ scale: 1 }).width
@@ -254,6 +258,10 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
         if (cancelled) return
         console.error('PDF 加载失败', e)
         setLoading(false)
+        // 旧外壳自愈：发新版后长驻标签页请求已删除的 hash 资产（pdf.js worker
+        // 404 → "Setting up fake worker failed"），刷新一次拿新外壳即恢复
+        if (selfHealStaleShell(e)) return
+        setLoadError(String(e).replace(/^Error:\s*/, ''))
       })
 
     return () => {
@@ -599,6 +607,18 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
       }}
     >
       {loading && <div className="viewer-hint">正在加载 PDF…</div>}
+      {loadError && (
+        <div className="viewer-hint" style={{ padding: '48px 24px', textAlign: 'center', lineHeight: 2 }}>
+          <div style={{ color: 'var(--fg-strong)', fontWeight: 600, marginBottom: 6 }}>无法加载 PDF</div>
+          <div style={{ fontSize: 12, wordBreak: 'break-all', maxWidth: 520, margin: '0 auto' }}>{loadError}</div>
+          <button
+            className="btn-primary" style={{ marginTop: 14, fontSize: 12, padding: '6px 16px' }}
+            onClick={() => { setLoadError(null); window.location.reload() }}
+          >
+            刷新重试
+          </button>
+        </div>
+      )}
       <div className="canvas-host" ref={hostRef} />
       {bubble && (
         <div className="sel-bubble" style={{ left: bubble.x, top: bubble.y }}>

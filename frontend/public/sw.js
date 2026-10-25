@@ -17,7 +17,7 @@
  * 新 SW 就绪后 skipWaiting + clients.claim 立即接管，无需手动加版本号。
  * 旧缓存桶在 activate 时按前缀清理（保留当前版本桶）。
  */
-const SHELL_CACHE = 'pr-shell-v2'
+const SHELL_CACHE = 'pr-shell-v3'
 const PDF_CACHE = 'pr-pdf-v2'
 const DATA_CACHE = 'pr-data-v1'
 
