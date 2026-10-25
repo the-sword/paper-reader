@@ -331,6 +331,13 @@ export default function PdfViewer({ url, scale, onBaseWidth }: Props) {
         if (cancelled) return
         const vp = page.getViewport({ scale })
 
+        // 用本页真实视口回写占位盒尺寸：占位值按首页近似尺寸建立，
+        // 页面尺寸不一致（混合尺寸/扫描件）或比例变化时，不回写会
+        // 造成内容比白纸盒宽/窄的错位
+        pageEl.style.width = `${vp.width}px`
+        pageEl.style.height = `${vp.height}px`
+        delete pageEl.dataset.needSize
+
         // 1) canvas
         const canvas = document.createElement('canvas')
         canvas.width = Math.floor(vp.width * ratio)

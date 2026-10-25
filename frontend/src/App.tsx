@@ -73,19 +73,44 @@ export default function App() {
   const [view, setView] = useState<ViewMode>('pdf')
 
   const mainRef = useRef<HTMLElement>(null)
-  const [baseWidth, setBaseWidth] = useState<number | null>(null)
+  // 基准宽按「文档id:视图」盖章。文档刚切换的瞬间旧文档的基准还留在状态里，
+  // 若被 fitWidth 拿去算缩放会得到离谱比例（如前一篇 1224pt 双栏页 →
+  // 新页被缩成一小条），且 lastFitFor 会抢先记账使正确基准到达后不再重拟合
+  const [baseSize, setBaseSize] = useState<{ key: string; w: number } | null>(null)
+  const fitKey = currentDoc ? `${currentDoc.id}:${view}` : null
+  const baseWidth = baseSize && baseSize.key === fitKey ? baseSize.w : null
 
   const clampScale = (v: number) => Math.max(SCALE_MIN, Math.min(SCALE_MAX, +v.toFixed(2)))
 
   const fitWidth = useCallback(() => {
     const el = mainRef.current
-    if (!el || !baseWidth) return
+    if (!el) return
+    let base = baseWidth
+    if (!base) {
+      // 基准未就绪（刚打开/刚切视图）时从已渲染页反推，保证按钮立即生效；
+      // offsetWidth 与容器上 --scale-factor 同代，相除即基准页宽
+      const page = el.querySelector<HTMLElement>('.pdf-page')
+      const sf = page ? parseFloat(getComputedStyle(page).getPropertyValue('--scale-factor')) : NaN
+      if (page?.offsetWidth && sf > 0) base = page.offsetWidth / sf
+    }
+    if (!base || base <= 0) return
     const avail = el.clientWidth - 24
     if (avail <= 0) return
     // 手机上允许缩得更小（0.15），PDF 才能适应窄屏宽度而非横向滚动
     const minScale = isMobile ? 0.15 : SCALE_MIN
-    setScale(Math.max(minScale, Math.min(SCALE_MAX, +(avail / baseWidth).toFixed(2))))
+    setScale(Math.max(minScale, Math.min(SCALE_MAX, +(avail / base).toFixed(2))))
   }, [baseWidth, isMobile])
+
+  // PdfViewer 测得基准宽：盖章「文档id:视图」。从 store 实时读文档，
+  // 回调身份恒定（deps 为空），不会引起 PdfViewer 加载 effect 的重跑
+  const onBaseWidthPdf = useCallback((w: number) => {
+    const d = useStore.getState().currentDoc
+    if (d) setBaseSize({ key: `${d.id}:pdf`, w })
+  }, [])
+  const onBaseWidthBilingual = useCallback((w: number) => {
+    const d = useStore.getState().currentDoc
+    if (d) setBaseSize({ key: `${d.id}:bilingual`, w })
+  }, [])
 
   useEffect(() => {
     const onResize = () => {
@@ -129,7 +154,7 @@ export default function App() {
   // 切换文献：只重置缩放，不再强制切换视图
   useEffect(() => {
     if (!currentDoc) return
-    setBaseWidth(null)
+    setBaseSize(null)
   }, [currentDoc])
 
   // 把主题应用到 <html>，使整个应用（含侧栏/顶栏）跟随
@@ -185,7 +210,7 @@ export default function App() {
             if (st.status === 'done') {
               setBdReady((m) => ({ ...m, [currentDoc.id]: true }))
               // 完成后直接在页面内切换到双语 PDF 视图（并重新适应宽度）
-              setBaseWidth(null)
+              setBaseSize(null)
               setView('bilingual')
             } else {
               setError(`双语 PDF 生成失败：${st.error ?? '未知原因'}`)
@@ -235,7 +260,7 @@ export default function App() {
   /** 切换视图并记住选择 */
   const switchView = (v: ViewMode) => {
     // 重置尺寸基准，让新视图重新测量并适应宽度
-    if (v !== view) setBaseWidth(null)
+    if (v !== view) setBaseSize(null)
     setView(v)
     if (viewPrefLoaded) {
       void api.savePrefs({ view_mode: v }).catch(() => {})
@@ -465,7 +490,7 @@ export default function App() {
                   <PdfViewer
                     url={api.babelDocPdfUrl(currentDoc.id)}
                     scale={scale}
-                    onBaseWidth={setBaseWidth}
+                    onBaseWidth={onBaseWidthBilingual}
                   />
                 ) : (
                   <div className="hint" style={{ padding: 40, textAlign: 'center' }}>
@@ -476,7 +501,7 @@ export default function App() {
                 <PdfViewer
                   url={api.pdfUrl(currentDoc.id)}
                   scale={scale}
-                  onBaseWidth={setBaseWidth}
+                  onBaseWidth={onBaseWidthPdf}
                 />
               )}
             </main>
