@@ -267,7 +267,7 @@ def export_yaml() -> str:
 
 
 def is_scheduler_enabled() -> bool:
-    """雷达调度开关（与 digest v1 调度相互独立）。"""
+    """雷达调度开关（唯一情报调度器，08:00 北京时间）。"""
     with db() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key=?", (ENABLED_KEY,)).fetchone()
     if not row or not row["value"]:

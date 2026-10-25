@@ -24,6 +24,27 @@ def is_valid_doc_id(doc_id: str) -> bool:
     return bool(_DOC_ID_RE.match(doc_id or ""))
 
 
+def local_document_signatures() -> set[str]:
+    """本地所有文献的标识集合（小写 DOI、去符号标题指纹）。
+
+    供情报雷达做「已在库」剔除：命中即不再作为新论文推荐。
+    """
+    sigs: set[str] = set()
+    try:
+        with db() as conn:
+            rows = conn.execute("SELECT title, doi FROM documents").fetchall()
+            for r in rows:
+                if r["doi"]:
+                    sigs.add(r["doi"].strip().lower())
+                if r["title"]:
+                    norm_t = re.sub(r"\W+", "", r["title"].lower())
+                    if len(norm_t) > 6:
+                        sigs.add(norm_t)
+    except Exception:  # noqa: BLE001
+        pass
+    return sigs
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 

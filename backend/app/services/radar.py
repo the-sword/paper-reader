@@ -1,13 +1,14 @@
 """Paper-Code Radar 编排服务。
 
 完整管道（SRS §2/§3）：
-  1. arXiv 分类订阅拉取（24h 窗口）
+  1. arXiv 分类订阅拉取（24h 窗口，默认过滤 cross-list）
   2. Stage 1 规则初筛（关键词，零 LLM 成本）+ 防重（digest_history 复用）
-  3. Stage 2 LLM 结构化评审（失败隔离，单条失败不阻断）
+  3. Stage 2 LLM 批量结构化评审（8 篇/次拼包；失败位单篇降级，单条失败不阻断）
   4. GitHub 代码活性审计（7 天缓存）
   5. 入选条目写 radar_papers + 每日 Markdown 归档（LIB_ROOT/radar/）
 
 产出只有两种：站内看板 + Markdown 归档，无外部推送（SRS C6）。
+手动刷新走 jobs 后台任务（进度可见、可取消）；定时调度走同步 run_pipeline。
 """
 from __future__ import annotations
 
@@ -22,8 +23,9 @@ from typing import Any
 from ..core.config import get_settings
 from ..core.db import db
 from . import arxiv as arxiv_svc
-from . import arxiv_digest, library
+from . import library
 from . import radar_arxiv, radar_github, radar_review, radar_topics
+from . import jobs as jobs_svc
 
 logger = logging.getLogger("radar")
 
@@ -31,6 +33,9 @@ logger = logging.getLogger("radar")
 MAX_REVIEW_PER_TOPIC = 8
 MAX_REVIEW_TOTAL = 15
 MAX_FETCH = 300
+BATCH_REVIEW_SIZE = 8  # 单次 LLM 调用拼包的论文数
+MAX_REPOS_PER_TOPIC = 3
+MAX_REPOS_TOTAL = 6
 BJ_OFFSET_HOURS = 8
 
 
@@ -162,51 +167,91 @@ class PipelineBusyError(RuntimeError):
 _PIPELINE_LOCK = threading.Lock()
 
 
+class PipelineCancelled(RuntimeError):
+    """用户取消管道（jobs 捕获后标记 cancelled）。"""
+
+
+def _report(job: jobs_svc.Job | None, pct: float, msg: str) -> None:
+    if job is not None:
+        job.progress = max(0.0, min(100.0, pct))
+        job.message = msg
+
+
+def _check_cancel(job: jobs_svc.Job | None) -> None:
+    if job is not None and job.cancel.is_set():
+        raise PipelineCancelled("已取消")
+
+
 def run_pipeline(target_date: str | None = None, force: bool = False) -> dict[str, Any]:
-    """执行一轮完整管道。同一时刻仅允许一轮：手动刷新与定时调度互斥。"""
+    """同步执行一轮完整管道（定时调度用）。同一时刻仅允许一轮。"""
     if not _PIPELINE_LOCK.acquire(blocking=False):
         raise PipelineBusyError("已有管道在运行中，请稍后再试")
     try:
-        return _run_pipeline_locked(target_date, force)
+        return _run_pipeline_locked(None, target_date, force)
     finally:
         _PIPELINE_LOCK.release()
 
 
-def _run_pipeline_locked(target_date: str | None = None, force: bool = False) -> dict[str, Any]:
+def start_pipeline_job(force: bool = True) -> jobs_svc.Job:
+    """以后台任务方式执行管道（手动刷新用）。
+
+    互斥检查在启动前完成（忙则立即抛 PipelineBusyError），
+    锁由任务线程在结束时释放。
+    """
+    if not _PIPELINE_LOCK.acquire(blocking=False):
+        raise PipelineBusyError("已有管道在运行中，请稍后再试")
+
+    def _work(job: jobs_svc.Job) -> dict[str, Any]:
+        try:
+            return _run_pipeline_locked(job, None, force)
+        finally:
+            _PIPELINE_LOCK.release()
+
+    return jobs_svc.start("radar-pipeline", _work)
+
+
+def _run_pipeline_locked(
+    job: jobs_svc.Job | None, target_date: str | None, force: bool,
+) -> dict[str, Any]:
     now = _now()
     date_str = target_date or _today_bj()
 
     if not force:
         cached = get_day(date_str)
         if any(cached.values()):
-            return {"date": date_str, "cached": True, "topics": cached}
+            return {"date": date_str, "cached": True, "topics": {}}
 
+    _report(job, 5, "读取 Topic 配置")
     topics = radar_topics.get_topics()
     if not topics:
         return {"date": date_str, "cached": False, "topics": {},
-                "message": "未配置任何 Topic，请先在看板中添加"}
+                "message": "未配置任何 Topic，请先在设置中添加"}
 
-    # 1. 拉取 24h 窗口内全部分类的新提交
+    # 1. 拉取 24h 窗口内全部分类的新提交（默认过滤 cross-list）
     all_cats: list[str] = []
     for t in topics:
         for c in t.get("categories") or []:
             if c not in all_cats:
                 all_cats.append(c)
     since, until = radar_arxiv.build_daily_window(now)
+    _report(job, 10, f"拉取 arXiv（{len(all_cats)} 个分类）…")
+    _check_cancel(job)
+    papers: list[dict[str, Any]] = []
     try:
-        papers = radar_arxiv.fetch_by_categories(all_cats, since, until, max_results=MAX_FETCH)
+        papers = radar_arxiv.fetch_by_categories(
+            all_cats, since, until, max_results=MAX_FETCH, include_cross_list=False,
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("arXiv 拉取失败: %s", e)
-        papers = []
 
     history = _history_map()
-    local_sigs = arxiv_digest._get_local_document_signatures()
+    local_sigs = library.local_document_signatures()
 
     audits_used = [0]
     review_total = [0]
     stats: dict[str, Any] = {}
 
-    for topic in topics:
+    for ti, topic in enumerate(topics):
         stage1 = []
         for p in papers:
             pid = _paper_key(p["arxiv_id"])
@@ -220,39 +265,151 @@ def _run_pipeline_locked(target_date: str | None = None, force: bool = False) ->
             if _stage1_filter(p, topic):
                 stage1.append(p)
 
+        # 预算截断：单 Topic 上限 + 全局上限
+        budget = min(MAX_REVIEW_PER_TOPIC, MAX_REVIEW_TOTAL - review_total[0])
+        to_review = stage1[:max(0, budget)]
+
         reviewed = shown = failed = 0
-        for p in stage1:
-            if reviewed >= MAX_REVIEW_PER_TOPIC or review_total[0] >= MAX_REVIEW_TOTAL:
-                break
-            reviewed += 1
-            review_total[0] += 1
-            pid = _paper_key(p["arxiv_id"])
+        for start in range(0, len(to_review), BATCH_REVIEW_SIZE):
+            _check_cancel(job)
+            chunk = to_review[start:start + BATCH_REVIEW_SIZE]
 
-            code_status, repo_url, repo_info = radar_github.code_status_for(p, audits_used)
-            if repo_info:
-                p = {**p, "stars": repo_info.get("stars") or 0}
+            # 先审计（代码状态是评审输入），再批量评审
+            audited: list[dict[str, Any]] = []
+            for p in chunk:
+                code_status, repo_url, repo_info = radar_github.code_status_for(p, audits_used)
+                item = {**p, "code_status": code_status, "_repo_url": repo_url,
+                        "_repo_info": repo_info}
+                audited.append(item)
+
+            batch_name = f"{topic['name']}：评审 {review_total[0] + 1}~{review_total[0] + len(chunk)}"
+            _report(job, 25 + 60 * min(1.0, review_total[0] / max(1, MAX_REVIEW_TOTAL)),
+                    batch_name)
+
+            reviews: list[dict[str, Any] | None] = [None] * len(audited)
             try:
-                review = radar_review.review_paper({**p, "code_status": code_status}, topic)
+                reviews = radar_review.review_batch(audited, topic)
             except Exception as e:  # noqa: BLE001
-                logger.warning("评审失败 %s(%s): %s", pid, topic["id"], e)
-                _commit_paper(p, topic, code_status, repo_url, None, "review_failed", date_str)
-                failed += 1
-                continue
+                logger.warning("批量评审失败（%s），整批降级单篇: %s", topic["id"], e)
+                reviews = [None] * len(audited)
 
-            # Star 数随评审卡片一起落库，供卡片与归档展示
-            if repo_info:
-                review = {**review, "repo_stars": repo_info.get("stars") or 0}
-            _commit_paper(p, topic, code_status, repo_url, review, "reviewed", date_str)
-            if _is_selected(review["relevance_score"], topic["min_score_to_show"], code_status):
-                shown += 1
+            for p, review in zip(audited, reviews):
+                _check_cancel(job)
+                reviewed += 1
+                review_total[0] += 1
+                pid = _paper_key(p["arxiv_id"])
+                repo_info = p.get("_repo_info") or {}
+
+                if review is None:
+                    # 失败位降级：单篇重试一次
+                    try:
+                        review = radar_review.review_paper(p, topic)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("评审失败 %s(%s): %s", pid, topic["id"], e)
+                        _commit_paper(p, topic, p["code_status"], p["_repo_url"],
+                                      None, "review_failed", date_str)
+                        failed += 1
+                        continue
+
+                if repo_info:
+                    review = {**review, "repo_stars": repo_info.get("stars") or 0}
+                _commit_paper(p, topic, p["code_status"], p["_repo_url"], review,
+                              "reviewed", date_str)
+                if _is_selected(review["relevance_score"], topic["min_score_to_show"],
+                                p["code_status"]):
+                    shown += 1
+
         stats[topic["id"]] = {"name": topic["name"], "stage1": len(stage1),
                               "reviewed": reviewed, "shown": shown, "failed": failed}
+        _report(job, 82, f"完成 Topic {ti + 1}/{len(topics)}：{topic['name']}")
+
+    # 1.5 独立开源项目发现（不依附于论文）：按 Topic 关键词搜 GitHub，
+    #     增速排序 + 防重（digest_history，id 为 github:owner/repo）
+    _report(job, 84, "发现独立开源项目…")
+    _check_cancel(job)
+    repos_found = _discover_repos(topics, history, date_str)
+    if repos_found:
+        history = _history_map()  # 刷新：新写入的 repo 也进入防重视图
 
     # 2. 每日 Markdown 归档（对本日全部入选条目重新生成，幂等）
+    _report(job, 92, "写入每日归档…")
     archived_path = write_daily_archive(date_str)
 
+    # 3. 轻量自动清理（digest v1 遗留职责迁入：digest_items 历史行 + star 打点，
+    #    只清非导入条目；radar_papers 不清——历史评审是检索知识库，永久保留）
+    try:
+        from ..core.db import cleanup_retention
+        cleanup_retention(180)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("180 天定时清理异常: %s", e)
+
+    _report(job, 98, "管道完成")
     return {"date": date_str, "cached": False, "topics": stats,
-            "archive": archived_path}
+            "repos": repos_found, "archive": archived_path}
+
+
+def _discover_repos(topics: list[dict[str, Any]], history: dict[str, dict[str, Any]],
+                    date_str: str) -> int:
+    """独立开源项目发现：搜索 → 防重/预算过滤 → 落库 radar_repo_items。
+
+    返回本轮新入选数。零 LLM 成本（增速评分即排序）；无关键词的 Topic 跳过。
+    """
+    used = 0
+    now = _now()
+    picked_ids: set[str] = set()  # 本轮已入选（history 是轮首快照，看不到本轮写入）
+    for topic in topics:
+        if used >= MAX_REPOS_TOTAL:
+            break
+        kws = topic.get("keywords") or []
+        if not kws:
+            continue
+        try:
+            candidates = radar_github.search_repositories(kws, limit=8)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("开源项目搜索失败（%s）: %s", topic["id"], e)
+            continue
+
+        picked = 0
+        for r in candidates:
+            if picked >= MAX_REPOS_PER_TOPIC or used >= MAX_REPOS_TOTAL:
+                break
+            rid = r["id"]
+            if rid in picked_ids:
+                continue
+            h = history.get(rid)
+            if h:
+                # 处置过（拉黑/忽略）永不再现；14 天冷却（含当日重跑幂等）
+                if h.get("action") in ("ignored", "dismissed"):
+                    continue
+                try:
+                    f = datetime.strptime(str(h.get("first_seen")), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    if (now - f).days < 14:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+            with db() as conn:
+                conn.execute(
+                    "INSERT INTO radar_repo_items (id, date, topic_id, title, url,"
+                    " description, stars, star_growth, language, pushed_at, created_at,"
+                    " score, first_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(id) DO UPDATE SET stars=excluded.stars,"
+                    " star_growth=excluded.star_growth, score=excluded.score",
+                    (rid, date_str, topic["id"], r["title"], r["url"],
+                     r.get("description", ""), r.get("stars", 0),
+                     r.get("star_growth", 0), r.get("language", ""),
+                     r.get("pushed_at", ""), r.get("created_at", ""),
+                     r.get("score", 0.0), now.isoformat()),
+                )
+                conn.execute(
+                    "INSERT INTO digest_history (id, source, first_seen_date,"
+                    " last_seen_date, user_action) VALUES (?, 'github', ?, ?, 'new') "
+                    "ON CONFLICT(id) DO UPDATE SET last_seen_date=excluded.last_seen_date",
+                    (rid, date_str, date_str),
+                )
+            picked += 1
+            used += 1
+            picked_ids.add(rid)
+    return used
 
 
 # ---------------------------------------------------------------------------
@@ -281,31 +438,105 @@ def _row_to_paper(row: Any) -> dict[str, Any]:
         "review": review,
         "score": row["score"],
         "first_seen": row["first_seen"],
+        "imported_doc_id": row["imported_doc_id"] if "imported_doc_id" in row.keys() else None,
     }
 
 
+def _bj_utc_window(date_str: str) -> tuple[str, str]:
+    """北京日期 D 对应的 UTC 窗口 [D-1 16:00, D+1 16:00)，字符串可直接与
+    first_seen 的 ISO 格式做字典序比较，作为 get_day 的 SQL 预过滤。"""
+    d = datetime.strptime(date_str, "%Y-%m-%d")
+    lo = (d - timedelta(days=1)).strftime("%Y-%m-%d") + "T16:00:00"
+    hi = (d + timedelta(days=1)).strftime("%Y-%m-%d") + "T16:00:00"
+    return lo, hi
+
+
 def get_day(date_str: str, topic_id: str | None = None) -> dict[str, list[dict[str, Any]]]:
-    """按北京日期返回看板入选条目，按 Topic 分组。"""
+    """按北京日期返回看板入选条目，按 Topic 分组。
+
+    展示语义（收件箱模型）：
+      - dismissed / ignored：隐藏（软冷却 / 永久拉黑）
+      - imported：保留展示（前端灰化 + 「打开阅读」）
+      - saved：保留展示（前端加收藏徽章）
+    """
     topics = {t["id"]: t for t in radar_topics.get_topics()}
     history = _history_map()
     grouped: dict[str, list[dict[str, Any]]] = {}
+    try:
+        lo, hi = _bj_utc_window(date_str)
+    except ValueError:
+        lo, hi = "0000-01-01T00:00:00", "9999-12-31T23:59:59"
     with db() as conn:
         rows = conn.execute(
-            "SELECT * FROM radar_papers WHERE review_status='reviewed' ORDER BY score DESC"
+            "SELECT * FROM radar_papers WHERE review_status='reviewed'"
+            " AND first_seen >= ? AND first_seen < ? ORDER BY score DESC",
+            (lo, hi),
         ).fetchall()
     for row in rows:
         if _bj_date(row["first_seen"]) != date_str:
             continue
         if topic_id and row["topic_id"] != topic_id:
             continue
-        if history.get(row["id"], {}).get("action") in ("ignored", "imported"):
+        action = history.get(row["id"], {}).get("action")
+        if action in ("ignored", "dismissed"):
             continue
         p = _row_to_paper(row)
+        p["action"] = action or "new"
         threshold = topics.get(row["topic_id"], {}).get("min_score_to_show", 4)
         if not _is_selected(int(p["score"] or 0), threshold, p["code_status"]):
             continue
         grouped.setdefault(row["topic_id"], []).append(p)
     return grouped
+
+
+def get_day_repos(date_str: str, topic_id: str | None = None) -> list[dict[str, Any]]:
+    """按北京日期返回独立开源项目条目（过滤 dismissed/ignored，保留收藏）。"""
+    history = _history_map()
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM radar_repo_items WHERE date=? ORDER BY score DESC",
+            (date_str,),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if topic_id and row["topic_id"] != topic_id:
+            continue
+        action = history.get(row["id"], {}).get("action")
+        if action in ("ignored", "dismissed"):
+            continue
+        out.append({
+            "id": row["id"], "topic_id": row["topic_id"], "title": row["title"],
+            "url": row["url"], "description": row["description"] or "",
+            "code_status": "repo",  # 前端仓库卡片类型标识
+            "stars": row["stars"] or 0, "star_growth": row["star_growth"] or 0,
+            "language": row["language"] or "", "pushed_at": row["pushed_at"] or "",
+            "created_at": row["created_at"] or "", "score": row["score"] or 0,
+            "action": action or "new",
+        })
+    return out
+
+
+def act_on_repo(repo_id: str, action: str) -> bool:
+    """开源项目条目的收件箱动作（save/dismiss/block/unsave/restore；import 不适用仓库）。"""
+    if not repo_id.startswith("github:") or action == "import":
+        return False
+    status = _ACTION_MAP.get(action)
+    if not status:
+        return False
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id FROM radar_repo_items WHERE id=? LIMIT 1", (repo_id,)
+        ).fetchone()
+        if not row:
+            return False
+        conn.execute(
+            "INSERT INTO digest_history (id, source, first_seen_date, last_seen_date,"
+            " user_action) VALUES (?, 'github', ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET user_action=excluded.user_action,"
+            " last_seen_date=excluded.last_seen_date",
+            (repo_id, _today_bj(), _today_bj(), status),
+        )
+    return True
 
 
 def search_papers(
@@ -368,11 +599,28 @@ def search_papers(
     return [_row_to_paper(r) for r in rows]
 
 
+# 动作语义（收件箱模型）：
+#   import  → imported   最强正信号，永久防重 + 卡片灰化保留
+#   block   → ignored    永久拉黑（兼容旧 ignore），永不再次推荐
+#   dismiss → dismissed  软忽略：仅从看板隐藏，仍可检索，14 天冷却后不复发
+#   save    → saved      收藏中间态：不导入不拉黑，随取随用
+#   unsave / restore → new  撤销收藏 / 恢复展示
+_ACTION_MAP = {
+    "import": "imported",
+    "block": "ignored",
+    "ignore": "ignored",     # 旧客户端兼容
+    "dismiss": "dismissed",
+    "save": "saved",
+    "unsave": "new",
+    "restore": "new",
+}
+
+
 def act_on_paper(paper_id: str, action: str) -> bool:
-    """ignore / import 用户动作，写 digest_history 永久防重（复用 v1 语义）。"""
-    if action not in ("ignore", "import"):
+    """收件箱动作，写 digest_history 防重（永久/软冷却由状态语义决定）。"""
+    status = _ACTION_MAP.get(action)
+    if not status:
         return False
-    status = "ignored" if action == "ignore" else "imported"
     with db() as conn:
         row = conn.execute(
             "SELECT topic_id FROM radar_papers WHERE id=? LIMIT 1", (paper_id,)
@@ -401,6 +649,17 @@ def import_paper(paper_id: str) -> dict[str, Any]:
     pdf_bytes = arxiv_svc.download_pdf(arxiv_id)
     doc = library.import_bytes(pdf_bytes, f"{arxiv_id}.pdf")
     act_on_paper(paper_id, "import")
+    # 记录导入后的 doc_id，看板「打开阅读」直达（同一论文多 Topic 行都更新）
+    doc_id = doc.get("id")
+    if doc_id:
+        try:
+            with db() as conn:
+                conn.execute(
+                    "UPDATE radar_papers SET imported_doc_id=? WHERE id=?",
+                    (doc_id, paper_id),
+                )
+        except Exception:  # noqa: BLE001
+            pass
     try:
         from . import toqueue
         if toqueue.is_enabled() and not doc.get("duplicated"):
@@ -447,6 +706,7 @@ def write_daily_archive(date_str: str | None = None) -> str:
     date_str = date_str or _today_bj()
     topics = {t["id"]: t for t in radar_topics.get_topics()}
     grouped = get_day(date_str)
+    repos = get_day_repos(date_str)
 
     lines: list[str] = [f"# Paper-Code Radar 情报 · {date_str}", ""]
     count = 0
@@ -474,6 +734,20 @@ def write_daily_archive(date_str: str | None = None) -> str:
             lines.append("")
         lines.append("")
 
+    if repos:
+        lines.append("## 开源项目（独立发现）")
+        lines.append("")
+        for i, r in enumerate(repos, 1):
+            count += 1
+            growth = f" · ⭐+{r['star_growth']}/天" if r.get("star_growth") else ""
+            lines.append(f"### {i}. [{r['title']}]({r['url']})")
+            lines.append(f"- ⭐ {r['stars']}{growth} · {r.get('language', '')}"
+                         f" · 最后提交 {r.get('pushed_at', '')[:10]}")
+            if r.get("description"):
+                lines.append(f"- 简介: {r['description']}")
+            lines.append("")
+        lines.append("")
+
     archive_dir = get_settings().lib_root / "radar"
     archive_dir.mkdir(parents=True, exist_ok=True)
     path = archive_dir / f"radar-{date_str}.md"
@@ -488,6 +762,79 @@ def write_daily_archive(date_str: str | None = None) -> str:
                 )
     logger.info("每日归档已写入 %s（%s 条）", path, count)
     return str(path)
+
+
+# ---------------------------------------------------------------------------
+# 看板元数据（空日兜底、当日成本）
+# ---------------------------------------------------------------------------
+
+def is_posting_day(date_str: str) -> bool:
+    """arXiv 是否为发文日（公告仅工作日发布，周末必为空日）。解析失败按 True。"""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").weekday() < 5
+    except ValueError:
+        return True
+
+
+def latest_day_with_papers(before: str | None = None, lookback: int = 14) -> str | None:
+    """最近一个有入选条目（论文或开源项目）的北京日期（供空日「查看上一篇」）。"""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT first_seen FROM radar_papers WHERE review_status='reviewed' "
+            "ORDER BY first_seen DESC LIMIT 500"
+        ).fetchall()
+        repo_rows = conn.execute(
+            "SELECT DISTINCT date FROM radar_repo_items ORDER BY date DESC LIMIT 100"
+        ).fetchall()
+    seen: set[str] = set()
+    dates: list[str] = []
+    for r in rows:
+        d = _bj_date(r["first_seen"])
+        if d and d not in seen:
+            seen.add(d)
+            dates.append(d)
+    for r in repo_rows:
+        d = r["date"]
+        if d not in seen:
+            seen.add(d)
+            dates.append(d)
+    dates.sort(reverse=True)
+    checked = 0
+    for d in dates:
+        if before is not None and d >= before:
+            continue
+        checked += 1
+        if checked > lookback:
+            break
+        has_papers = sum(len(v) for v in get_day(d).values()) > 0
+        has_repos = len(get_day_repos(d)) > 0
+        if has_papers or has_repos:
+            return d
+    return None
+
+
+def day_usage(date_str: str) -> dict[str, int]:
+    """当日管道成本：评审条数 + LLM token 用量（settings 表 radar.llm.usage）。"""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT first_seen FROM radar_papers WHERE review_status='reviewed'"
+        ).fetchall()
+        usage_row = conn.execute(
+            "SELECT value FROM settings WHERE key='radar.llm.usage'"
+        ).fetchone()
+    reviewed = sum(1 for r in rows if _bj_date(r["first_seen"]) == date_str)
+    out = {"reviewed": reviewed, "calls": 0, "token_in": 0, "token_out": 0}
+    if usage_row and usage_row["value"]:
+        try:
+            day = (json.loads(usage_row["value"]) or {}).get(date_str) or {}
+            out.update({
+                "calls": int(day.get("calls", 0)),
+                "token_in": int(day.get("token_in", 0)),
+                "token_out": int(day.get("token_out", 0)),
+            })
+        except Exception:  # noqa: BLE001
+            pass
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -201,6 +201,24 @@ CREATE TABLE IF NOT EXISTS radar_repos (
 CREATE VIRTUAL TABLE IF NOT EXISTS radar_fts USING fts5(
   paper_id UNINDEXED, title, abstract, summary_zh, innovation_zh
 );
+
+-- 独立开源项目发现条目（不依附于论文；防重走 digest_history，id 为 github:owner/repo）
+CREATE TABLE IF NOT EXISTS radar_repo_items (
+  id          TEXT PRIMARY KEY,      -- github:owner/repo
+  date        TEXT NOT NULL,         -- 北京日期 YYYY-MM-DD
+  topic_id    TEXT NOT NULL,
+  title       TEXT NOT NULL,         -- owner/repo 展示名
+  url         TEXT NOT NULL,
+  description TEXT,
+  stars       INTEGER DEFAULT 0,
+  star_growth INTEGER DEFAULT 0,
+  language    TEXT,
+  pushed_at   TEXT,
+  created_at  TEXT,
+  score       REAL DEFAULT 0,        -- 增速评分，排序用
+  first_seen  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_radar_repo_items_date ON radar_repo_items(date);
 """
 
 
@@ -240,6 +258,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE annotations ADD COLUMN start_offset INTEGER")
     if "end_offset" not in ann_cols:
         conn.execute("ALTER TABLE annotations ADD COLUMN end_offset INTEGER")
+
+    # 情报雷达：导入后记录文献 doc_id，看板「打开阅读」直达
+    radar_cols = cols("radar_papers")
+    if "imported_doc_id" not in radar_cols:
+        conn.execute("ALTER TABLE radar_papers ADD COLUMN imported_doc_id TEXT")
 
 
 def init_db() -> None:

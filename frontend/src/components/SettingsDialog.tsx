@@ -4,6 +4,7 @@ import {
   type AIConfig, type EngineInfo, type EngineTestResult,
 } from '../api/client'
 import { useStore } from '../stores/useStore'
+import RadarTopicsEditor from './RadarTopicsEditor'
 
 const AI_PRESETS = [
   { label: 'DeepSeek', base: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
@@ -11,7 +12,7 @@ const AI_PRESETS = [
   { label: '阿里百炼', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
 ]
 
-type Tab = 'ai' | 'engines' | 'glossary' | 'mineru' | 'backup' | 'system'
+type Tab = 'ai' | 'engines' | 'glossary' | 'mineru' | 'radar' | 'backup' | 'system'
 
 export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>('engines')
@@ -21,6 +22,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
     ['ai', 'AI 接口'],
     ['glossary', '术语表'],
     ['mineru', 'MinerU'],
+    ['radar', '🛰 雷达'],
     ['backup', '备份'],
     ['system', '系统信息'],
   ]
@@ -68,6 +70,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           {tab === 'ai' && <AITab onSaved={() => { /* no-op */ }} />}
           {tab === 'glossary' && <GlossaryTab />}
           {tab === 'mineru' && <MinerUTab />}
+          {tab === 'radar' && <RadarTopicsEditor />}
           {tab === 'backup' && <BackupTab />}
           {tab === 'system' && <SystemTab />}
         </div>

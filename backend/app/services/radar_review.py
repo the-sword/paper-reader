@@ -188,3 +188,135 @@ def review_paper(paper: dict[str, Any], topic: dict[str, Any]) -> dict[str, Any]
             logger.info("评审重试 %s（%s）: %s", attempt + 1, paper.get("id"), e)
 
     raise RuntimeError(f"评审失败（已重试）: {last_err}")
+
+
+# ---------------------------------------------------------------------------
+# 批量评审：多篇拼包进一次调用，返回与输入等长的列表（失败位为 None，
+# 由调用方降级走单篇评审）。单条缺失/非法不拖垮整批。
+# ---------------------------------------------------------------------------
+
+_BATCH_SYSTEM_PROMPT = (
+    "你是一位资深技术 Reviewer，负责批量评估多篇学术论文与特定研究主题的相关性。"
+    "我会给出编号的论文列表，请对每一篇输出结构化评审，relevance_score 为 1~5 的整数：\n"
+    "5 = 完全命中主题且工程价值极高；4 = 高度相关有落地价值；"
+    "3 = 部分相关；2 = 勉强沾边；1 = 与主题无关。\n"
+    "你必须且只能输出一个 JSON 数组，不要输出任何其他文字或 Markdown 代码块标记。"
+    "数组每个元素是一个 JSON 对象，字段为："
+    "index(int, 对应论文编号，从 1 开始), relevance_score(int), primary_tag(str), "
+    "one_sentence_summary(str), problem_solved(str), core_innovation(str), "
+    "practical_value(str), pass_filter(bool)。"
+    "中文分析字段用中文填写，pass_filter 表示是否值得进入看板（score>=3 即 true）。"
+    "论文列表有几位就输出几个元素，顺序与编号一一对应，不得遗漏或合并。"
+)
+
+
+def _extract_json_array(text: str) -> list[dict[str, Any]]:
+    """从模型回复中提取 JSON 数组（容忍 ```json 包裹与前后噪声）。"""
+    text = text.strip()
+    m = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", text, re.S)
+    if m:
+        text = m.group(1)
+    else:
+        start, end = text.find("["), text.rfind("]")
+        if start < 0 or end <= start:
+            raise ValueError("回复中没有 JSON 数组")
+        text = text[start:end + 1]
+    arr = json.loads(text)
+    if not isinstance(arr, list):
+        raise ValueError("评审结果不是 JSON 数组")
+    return [x for x in arr if isinstance(x, dict)]
+
+
+def _build_batch_user_prompt(papers: list[dict[str, Any]], topic: dict[str, Any]) -> str:
+    focus = topic.get("evaluation_focus") or "无额外侧重，按主题名称常规评估。"
+    lines = [
+        f"【研究主题】{topic.get('name', '')}",
+        f"【评审侧重】{focus}",
+        f"【论文数量】{len(papers)}",
+        "",
+    ]
+    for i, p in enumerate(papers, 1):
+        code_desc = {
+            "code_available": "有配套开源代码（已验证真实可用）",
+            "placeholder": "附代码链接但疑似占位仓库",
+            "no_code": "未发现开源代码",
+        }.get(p.get("code_status"), "未知")
+        cats = ", ".join(p.get("categories") or []) or "无"
+        lines.append(f"--- 论文 {i} ---")
+        lines.append(f"标题：{p.get('title', '')}")
+        lines.append(f"分类：{cats}")
+        lines.append(f"代码状态：{code_desc}")
+        lines.append(f"摘要：{p.get('abstract', '')[:2000]}")
+        lines.append("")
+    lines.append("请输出评审 JSON 数组（每篇一个元素，含 index 字段）。")
+    return "\n".join(lines)
+
+
+def review_batch(papers: list[dict[str, Any]], topic: dict[str, Any]) -> list[dict[str, Any] | None]:
+    """批量评审。返回与 papers 等长的列表：成功位为评审卡片，失败位为 None。
+
+    整批调用失败（网络/HTTP）直接抛异常；整批返回但个别条目缺失或非法时
+    对应位为 None，由调用方决定是否单篇降级重试。
+    """
+    if not papers:
+        return []
+    cfg = ai_mod.get_ai_config()
+    if not cfg.get("base_url") or not cfg.get("api_key"):
+        raise RuntimeError("未配置 AI 接口：请在设置页填写 base_url 与 api_key")
+
+    url = cfg["base_url"].rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {cfg['api_key']}",
+        "Content-Type": "application/json",
+    }
+    user_prompt = _build_batch_user_prompt(papers, topic)
+
+    last_err: Exception | None = None
+    for attempt in range(2):
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": _BATCH_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+        if attempt == 1 and last_err is not None:
+            messages.append({
+                "role": "user",
+                "content": f"上一次输出不合法（{last_err}）。请严格只输出一个合法 JSON 数组，"
+                           "每个元素含 index 字段且与论文编号一一对应，不要任何解释。",
+            })
+        payload = {
+            "model": cfg.get("model") or "gpt-3.5-turbo",
+            "messages": messages,
+            "temperature": 0.2,
+            "stream": False,
+        }
+        try:
+            with make_client(url, timeout=180) as client:
+                r = client.post(url, json=payload, headers=headers)
+            if r.status_code != 200:
+                raise RuntimeError(f"AI 接口 HTTP {r.status_code}: {r.text[:200]}")
+            body = r.json()
+            _record_usage(body.get("usage") or {})
+            content = (body.get("choices") or [{}])[0].get("message", {}).get("content", "")
+            if not content.strip():
+                raise ValueError("AI 返回内容为空")
+            arr = _extract_json_array(content)
+            out: list[dict[str, Any] | None] = [None] * len(papers)
+            for obj in arr:
+                try:
+                    idx = int(obj.get("index", 0)) - 1
+                except (TypeError, ValueError):
+                    continue
+                if not 0 <= idx < len(papers):
+                    continue
+                if out[idx] is not None:
+                    continue
+                try:
+                    out[idx] = _validate_review(obj)
+                except ValueError as e:
+                    logger.info("批量评审第 %d 条不合法: %s", idx + 1, e)
+            return out
+        except (ValueError, RuntimeError, json.JSONDecodeError) as e:  # noqa: PERF001
+            last_err = e
+            logger.info("批量评审重试（%s）: %s", attempt + 1, e)
+
+    raise RuntimeError(f"批量评审失败（已重试）: {last_err}")

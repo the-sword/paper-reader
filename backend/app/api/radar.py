@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+from ..services import jobs as jobs_svc
 from ..services import radar, radar_topics
 from ..services.arxiv_taxonomy import get_cached_taxonomy, sync_taxonomy
 from ..services.radar import PipelineBusyError
@@ -24,7 +25,22 @@ class YamlImportReq(BaseModel):
 
 
 class ActionReq(BaseModel):
-    action: str  # 'ignore' | 'import'
+    action: str  # import | block | dismiss | save | unsave | restore（兼容 ignore）
+
+
+def _day_payload(date_str: str, grouped: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    """看板响应的公共部分：论文分组 + 独立开源项目 + 空日兜底元数据 + 当日成本。"""
+    repos = radar.get_day_repos(date_str)
+    return {
+        "date": date_str,
+        "topics": grouped,
+        "total": sum(len(v) for v in grouped.values()),
+        "repos": repos,
+        "repos_total": len(repos),
+        "is_posting_day": radar.is_posting_day(date_str),
+        "prev_date": radar.latest_day_with_papers(before=date_str),
+        "usage": radar.day_usage(date_str),
+    }
 
 
 @router.get("/today")
@@ -32,32 +48,44 @@ def get_today() -> dict[str, Any]:
     """今日各 Topic 入选条目（分组返回）。不自动触发抓取，避免看板打开即烧 LLM。"""
     try:
         from ..services.radar import _today_bj
-        grouped = radar.get_day(_today_bj())
-        return {"date": _today_bj(), "topics": grouped,
-                "total": sum(len(v) for v in grouped.values())}
+        return _day_payload(_today_bj(), radar.get_day(_today_bj()))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"获取今日情报失败: {e}") from e
 
 
 @router.post("/refresh")
 def refresh() -> dict[str, Any]:
-    """立即执行一轮完整管道（抓取→初筛→评审→归档）。耗时较长（含 LLM 调用）。"""
+    """启动一轮完整管道（抓取→初筛→评审→归档）后台任务，立即返回 job_id。"""
     try:
-        return radar.run_pipeline(force=True)
+        job = radar.start_pipeline_job(force=True)
     except PipelineBusyError as e:
         # 并发刷新是请求冲突，不是服务端错误
         raise HTTPException(409, str(e)) from e
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(500, f"刷新失败: {e}") from e
+    return {"job_id": job.id, "status": job.status}
+
+
+@router.get("/pipeline/{job_id}")
+def pipeline_job(job_id: str) -> dict[str, Any]:
+    """查询管道任务进度（running/done/failed/cancelled）。"""
+    job = jobs_svc.get(job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在或已过期")
+    return job.to_dict()
+
+
+@router.post("/pipeline/{job_id}/cancel")
+def cancel_pipeline(job_id: str) -> dict[str, Any]:
+    """取消运行中的管道任务。"""
+    if not jobs_svc.cancel(job_id):
+        raise HTTPException(400, "取消失败（任务不存在或已结束）")
+    return {"ok": True}
 
 
 @router.get("/archive")
 def get_archive(date: str) -> dict[str, Any]:
     """回溯查看往期入选条目（按北京日期）。"""
     try:
-        grouped = radar.get_day(date)
-        return {"date": date, "topics": grouped,
-                "total": sum(len(v) for v in grouped.values())}
+        return _day_payload(date, radar.get_day(date))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"查询归档失败: {e}") from e
 
@@ -149,8 +177,11 @@ def export_yaml() -> str:
 
 @router.post("/{paper_id:path}/action")
 def act_on_paper(paper_id: str, body: ActionReq) -> dict[str, Any]:
-    """ignore / import 用户动作（永久防重）。"""
-    ok = radar.act_on_paper(paper_id, body.action)
+    """收件箱动作：论文与开源项目共用（github: 前缀路由到仓库条目）。"""
+    if paper_id.startswith("github:"):
+        ok = radar.act_on_repo(paper_id, body.action)
+    else:
+        ok = radar.act_on_paper(paper_id, body.action)
     if not ok:
         raise HTTPException(400, "操作失败或无效的 action 类型")
     return {"ok": True, "id": paper_id, "action": body.action}

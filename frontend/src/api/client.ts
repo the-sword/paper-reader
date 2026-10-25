@@ -127,40 +127,6 @@ export interface Reference {
   year: number | null
   venue: string
 }
-export interface DigestItem {
-  id: string
-  source: 'arxiv' | 'github'
-  date: string
-  title: string
-  url: string
-  summary: string
-  score: number
-  meta: {
-    authors?: string[]
-    published?: string
-    categories?: string[]
-    doi?: string
-    pdf_url?: string
-    already_in_library?: boolean
-    imported_doc_id?: string
-    arxiv_id?: string
-    stars?: number
-    forks?: number
-    star_growth?: number
-    language?: string
-    updated_at?: string
-    created_at?: string
-    pushed_at?: string
-  }
-  status: 'new' | 'imported' | 'ignored'
-}
-
-export interface DigestResponse {
-  date: string
-  items: DigestItem[]
-  counts: { arxiv: number; github: number }
-  cached?: boolean
-}
 
 // ---- Paper-Code Radar ----
 export interface RadarTopic {
@@ -198,12 +164,42 @@ export interface RadarPaper {
   review: RadarReview
   score: number | null
   first_seen: string
+  action?: 'new' | 'saved' | 'imported' | 'dismissed' | 'ignored'
+  imported_doc_id?: string | null
+}
+
+export interface RadarRepoItem {
+  id: string            // github:owner/repo
+  topic_id: string
+  title: string         // owner/repo
+  url: string
+  description: string
+  code_status: 'repo'   // 仓库卡片类型标识
+  stars: number
+  star_growth: number
+  language: string
+  pushed_at: string
+  created_at: string
+  score: number
+  action: 'new' | 'saved' | 'dismissed' | 'ignored'
+}
+
+export interface RadarDayUsage {
+  reviewed: number
+  calls: number
+  token_in: number
+  token_out: number
 }
 
 export interface RadarDayResponse {
   date: string
   topics: Record<string, RadarPaper[]>
   total: number
+  repos?: RadarRepoItem[]
+  repos_total?: number
+  is_posting_day?: boolean
+  prev_date?: string | null
+  usage?: RadarDayUsage
 }
 
 export interface RadarConfigResponse {
@@ -221,12 +217,20 @@ export interface RadarStats {
   llm_usage: Record<string, { calls: number; token_in: number; token_out: number }>
 }
 
-export interface RadarRefreshResponse {
-  date: string
-  cached: boolean
-  topics: Record<string, { name: string; stage1: number; reviewed: number; shown: number; failed: number }>
-  archive?: string
-  message?: string
+export interface RadarPipelineJob {
+  id: string
+  kind: string
+  status: 'running' | 'done' | 'failed' | 'cancelled'
+  progress: number
+  message: string
+  result?: {
+    date: string
+    cached: boolean
+    topics: Record<string, { name: string; stage1: number; reviewed: number; shown: number; failed: number }>
+    archive?: string
+    message?: string
+  } | null
+  error?: string | null
 }
 
 export interface SelfCheckResult {
@@ -498,22 +502,15 @@ export const api = {
   saveGlossary: (g: Record<string, string>) =>
     req<{ ok: boolean; count: number }>('/reading/config/glossary', { method: 'POST', body: JSON.stringify({ glossary: g }) }),
 
-  // ---- 每日情报 (Daily Digest) ----
-  getTodayDigest: () => req<DigestResponse>('/digest/today'),
-  getArchiveDigest: (date: string) => req<DigestResponse>(`/digest/archive?date=${date}`),
-  refreshDigest: () => req<DigestResponse>('/digest/refresh', { method: 'POST' }),
-  actOnDigestItem: (id: string, action: 'ignore' | 'import') =>
-    req<{ ok: boolean }>(`/digest/${id}/action`, { method: 'POST', body: JSON.stringify({ action }) }),
-  importDigestPaper: (id: string) =>
-    req<{ ok: boolean; document: any }>(`/digest/${id}/import-paper`, { method: 'POST' }),
-  getDigestConfig: () => req<{ topics: string[]; scheduler_enabled: boolean }>('/digest/config'),
-  updateDigestConfig: (c: { topics: string[]; scheduler_enabled?: boolean }) =>
-    req<{ ok: boolean; topics: string[]; scheduler_enabled: boolean }>('/digest/config', { method: 'POST', body: JSON.stringify(c) }),
-
-  // ---- 情报雷达 (Paper-Code Radar) ----
+  // ---- Paper-Code Radar（收件箱式情报流）----
   radarToday: () => req<RadarDayResponse>('/radar/today'),
-  radarRefresh: () => req<RadarRefreshResponse>('/radar/refresh', { method: 'POST' }),
   radarArchive: (date: string) => req<RadarDayResponse>(`/radar/archive?date=${date}`),
+  radarRefresh: () =>
+    req<{ job_id: string; status: string }>('/radar/refresh', { method: 'POST' }),
+  radarPipelineJob: (jobId: string) =>
+    req<RadarPipelineJob>(`/radar/pipeline/${jobId}`),
+  radarPipelineCancel: (jobId: string) =>
+    req<{ ok: boolean }>(`/radar/pipeline/${jobId}/cancel`, { method: 'POST' }),
   radarSearch: (p: { q?: string; topic_id?: string; code_status?: string; min_score?: number; date_from?: string; date_to?: string; limit?: number }) => {
     const qs = new URLSearchParams()
     if (p.q) qs.set('q', p.q)
@@ -536,7 +533,7 @@ export const api = {
     req<{ ok: boolean; imported: number; rejected: number; total: number; topics: RadarTopic[] }>(
       '/radar/config/import', { method: 'POST', body: JSON.stringify({ text }) }),
   radarExportYaml: () => req<string>('/radar/config/export'),
-  radarActOnPaper: (id: string, action: 'ignore' | 'import') =>
+  radarActOnPaper: (id: string, action: 'import' | 'block' | 'ignore' | 'dismiss' | 'save' | 'unsave' | 'restore') =>
     req<{ ok: boolean }>(`/radar/${id}/action`, { method: 'POST', body: JSON.stringify({ action }) }),
   radarImportPaper: (id: string) =>
     req<{ ok: boolean; document: any }>(`/radar/${id}/import-paper`, { method: 'POST' }),

@@ -62,9 +62,8 @@ async def auth_middleware(request: Request, call_next):
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
-    from .services import digest, radar
+    from .services import radar
 
-    digest.start_scheduler()
     radar.start_scheduler()
     # arXiv 分类清单：启动时检查同步（30 天间隔，失败静默用缓存/内置表兜底）
     from .services import arxiv_taxonomy

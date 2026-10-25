@@ -232,3 +232,131 @@ def code_status_for(paper: dict[str, Any], audits_used: list[int] | None = None)
     if info["is_empty"]:
         return "placeholder", f"https://github.com/{repo}", info
     return "code_available", f"https://github.com/{repo}", info
+
+
+# ---------------------------------------------------------------------------
+# 独立开源项目发现（不依附于论文）：关键词搜索 + 活跃/黑马过滤 + Star 增速排序
+# 改造自 v1 github_digest（git 历史），网络调用全部在 SQLite 事务外完成。
+# ---------------------------------------------------------------------------
+
+SEARCH_API = "https://api.github.com/search/repositories"
+
+# 只关注近期活跃的仓库：14 天内有提交，或 60 天内新建的黑马
+_ACTIVE_PUSHED_DAYS = 14
+_NEW_CREATED_DAYS = 60
+# 最后提交超过该天数视为停更，坚决剔除
+_STALE_PUSHED_DAYS = 30
+
+
+def search_repositories(keywords: list[str], limit: int = 8) -> list[dict[str, Any]]:
+    """按关键词发现独立开源项目，按增速评分倒序返回。
+
+    两种查询（GitHub Search API）：
+      1) 近 60 天新建且 star>5 的新星库（黑马）
+      2) 近 14 天有活跃提交且 star>30 的热门库
+    Star 增速：github_stars 表每日打点差分；首次见到的仓库按「star/库龄」估日均增速。
+    """
+    kws = [k.strip() for k in keywords if k.strip()]
+    if not kws:
+        return []
+
+    now = _now()
+    today = now.strftime("%Y-%m-%d")
+    recent_pushed = (now - timedelta(days=_ACTIVE_PUSHED_DAYS)).strftime("%Y-%m-%d")
+    recent_created = (now - timedelta(days=_NEW_CREATED_DAYS)).strftime("%Y-%m-%d")
+    headers = _headers(_get_token())
+
+    raw: dict[str, dict[str, Any]] = {}
+
+    def _fetch(q: str) -> None:
+        try:
+            with make_client(SEARCH_API, timeout=30) as client:
+                r = client.get(SEARCH_API, params={
+                    "q": q, "sort": "stars", "order": "desc",
+                    "per_page": min(10, limit),
+                }, headers=headers)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("GitHub 搜索失败（%s）: %s", q, e)
+            return
+        if r.status_code != 200:
+            logger.warning("GitHub 搜索 HTTP %s（%s）", r.status_code, q)
+            return
+        try:
+            for it in r.json().get("items", []):
+                fn = (it.get("full_name") or "").strip()
+                if fn and fn.lower() not in raw:
+                    raw[fn.lower()] = it
+        except ValueError:
+            return
+
+    # 每 Topic 至多取前 4 个关键词，避免搜索配额浪费（无 token 限流 10 次/分钟）
+    for kw in kws[:4]:
+        quoted = f'"{kw}"' if " " in kw else kw
+        _fetch(f"{quoted} created:>{recent_created} stars:>5")
+        _fetch(f"{quoted} pushed:>{recent_pushed} stars:>30")
+
+    if not raw:
+        return []
+
+    results: list[dict[str, Any]] = []
+    with db() as conn:
+        for full_name, item in raw.items():
+            pushed_str = item.get("pushed_at") or ""
+            try:
+                pushed_dt = datetime.fromisoformat(pushed_str.replace("Z", "+00:00"))
+                if (now - pushed_dt).days > _STALE_PUSHED_DAYS:
+                    continue
+            except (ValueError, TypeError):
+                pass
+
+            stars = int(item.get("stargazers_count") or 0)
+
+            # Star 打点（今日快照幂等 upsert）
+            conn.execute(
+                "INSERT INTO github_stars (full_name, date, stars) VALUES (?, ?, ?) "
+                "ON CONFLICT(full_name, date) DO UPDATE SET stars=excluded.stars",
+                (full_name, today, stars),
+            )
+            prev = conn.execute(
+                "SELECT date, stars FROM github_stars WHERE full_name=? AND date<? "
+                "ORDER BY date DESC LIMIT 1",
+                (full_name, today),
+            ).fetchone()
+
+            growth = 0
+            created_dt: datetime | None = None
+            created_str = item.get("created_at") or ""
+            try:
+                created_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                created_dt = None
+
+            if prev:
+                try:
+                    prev_dt = datetime.strptime(prev["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    days = max(1, (now - prev_dt).days)
+                    growth = max(0, round((stars - prev["stars"]) / days))
+                except ValueError:
+                    growth = 0
+            elif created_dt:
+                age = max(1, (now - created_dt).days)
+                growth = max(0, round(stars / age))
+
+            new_bonus = 30.0 if created_dt and (now - created_dt).days <= _NEW_CREATED_DAYS else 0.0
+            score = round(growth * 2.5 + min(80.0, stars / 30.0) + new_bonus, 2)
+
+            results.append({
+                "id": f"github:{full_name}",
+                "title": item.get("full_name") or full_name,
+                "url": item.get("html_url") or f"https://github.com/{full_name}",
+                "description": (item.get("description") or "").strip(),
+                "stars": stars,
+                "star_growth": growth,
+                "language": item.get("language") or "Other",
+                "pushed_at": pushed_str,
+                "created_at": created_str,
+                "score": score,
+            })
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:limit]

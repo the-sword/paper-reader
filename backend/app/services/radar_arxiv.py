@@ -46,15 +46,18 @@ def fetch_by_categories(
     since: datetime,
     until: datetime,
     max_results: int = 300,
+    include_cross_list: bool = False,
 ) -> list[dict[str, Any]]:
     """拉取多个分类在 [since, until] 时间窗内的新提交。
 
+    include_cross_list=False（默认）时只保留主分类命中订阅集的论文，
+    过滤掉「跨分类重投」（cross-list）——cat: 查询天然命中次分类，
+    不滤掉会把话题外论文大量带进候选池。
+
     返回按提交时间倒序的条目列表；单条时间戳解析失败直接丢弃（SRS FR-2.1）。
     """
-    cats = [c.strip() for c in categories if c.strip()]
-    if not cats:
-        return []
-    query = "+OR+".join(f"cat:{c}" for c in cats)
+    cats = {c.strip().lower() for c in categories if c.strip()}
+    query = "+OR+".join(f"cat:{c}" for c in categories if c.strip())
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     page_size = 100
@@ -86,6 +89,10 @@ def fetch_by_categories(
             clean_id = re.sub(r"v\d+$", "", aid_raw.strip())
             key = f"arxiv:{clean_id}"
             if key in seen:
+                continue
+            # cross-list 过滤：主分类不在订阅集 → 丢弃
+            primary = (item.get("primary_category") or "").lower()
+            if cats and not include_cross_list and primary not in cats:
                 continue
             seen.add(key)
             ts = _parse_ts(item["published"])
@@ -136,6 +143,11 @@ def _parse_feed(xml: str) -> list[dict[str, Any]]:
         cats = [
             c.get("term") for c in entry.findall(f"{_ATOM}category") if c.get("term")
         ]
+        # 主分类：arXiv 专用元素优先，缺失时退化为分类列表首项
+        primary_el = entry.find(f"{_ARXIV_NS}primary_category")
+        primary = (primary_el.get("term") if primary_el is not None else None) or (
+            cats[0] if cats else ""
+        )
         doi = (entry.findtext(f"{_ARXIV_NS}doi") or "").strip() or None
         items.append({
             "arxiv_id": aid,
@@ -145,6 +157,7 @@ def _parse_feed(xml: str) -> list[dict[str, Any]]:
             "comment": comment,
             "authors": authors,
             "categories": cats,
+            "primary_category": primary,
             "doi": doi,
             "abs_url": f"https://arxiv.org/abs/{aid}",
             "pdf_url": f"https://arxiv.org/pdf/{aid}",

@@ -236,31 +236,8 @@ export default function Sidebar({ width = 260 }: { width?: number }) {
 
       <div
         style={{
-          ...itemStyle(mainView === 'digest'),
-          marginTop: 4,
-        }}
-        onClick={() => setMainView('digest')}
-        title="每天 08:00 自动聚合前沿论文与热门开源代码"
-      >
-        <span>📡</span> 每日情报
-        <span
-          style={{
-            marginLeft: 'auto',
-            fontSize: 10,
-            fontWeight: 700,
-            background: 'linear-gradient(135deg, #f59e0b, #ef4444)',
-            color: '#fff',
-            borderRadius: 8,
-            padding: '1px 6px',
-          }}
-        >
-          NEW
-        </span>
-      </div>
-
-      <div
-        style={{
           ...itemStyle(mainView === 'radar'),
+          marginTop: 4,
         }}
         onClick={() => setMainView('radar')}
         title="多主题 arXiv 订阅 + 代码活性审计 + LLM 评审"
