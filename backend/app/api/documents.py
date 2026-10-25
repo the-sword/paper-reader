@@ -61,6 +61,12 @@ def get_pdf(doc_id: str) -> FileResponse:
 @router.delete("/{doc_id}")
 def delete_document(doc_id: str) -> dict:
     library.delete_document(doc_id)
+    # 联动清理双语 PDF 队列条目，否则界面上会残留指向已删文献的失败/排队记录
+    try:
+        from ..services import toqueue
+        toqueue.remove(doc_id)
+    except Exception:  # noqa: BLE001
+        pass
     return {"ok": True}
 
 

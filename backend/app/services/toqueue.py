@@ -239,10 +239,28 @@ def snapshot() -> dict[str, Any]:
 
 
 def clear_finished() -> int:
-    """清理已完成/跳过的记录。"""
+    """清理已完成/跳过/失败的记录（失败记录可重试，清掉即不再提示）。"""
     n = 0
     with _LOCK:
-        for k in [k for k, v in _ITEMS.items() if v.status in ("done", "skipped")]:
+        for k in [k for k, v in _ITEMS.items()
+                  if v.status in ("done", "skipped", "failed")]:
             _ITEMS.pop(k, None)
             n += 1
     return n
+
+
+def remove(doc_id: str) -> bool:
+    """彻底移除某篇的队列记录（文献被删除时联动清理）。
+
+    pending：直接删记录（_QUEUE 里的残留由 worker 的
+    「无记录或非 pending 即跳过」逻辑自然忽略）；
+    running：发取消信号，条目由 worker 收尾时丢弃（不写回 _ITEMS 已删除的键——
+    worker 持有 item 引用，写的是对象属性，不影响已出表的可见性）。
+    """
+    with _LOCK:
+        item = _ITEMS.pop(doc_id, None)
+        if not item:
+            return False
+        if item.status == "running":
+            _CANCEL_CURRENT.set()
+    return True
