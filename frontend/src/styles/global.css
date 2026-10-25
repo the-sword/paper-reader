@@ -30,6 +30,10 @@
 
 html, body, #root { height: 100%; margin: 0; }
 
+/* 文档级常驻滚动条槽位：内容渲染过程中 vw 会在「有/无滚动条」之间跳变，
+   flex 布局的阅读区宽度随之抖动 → 「适应宽度」量出的可用宽度不稳定 */
+html { scrollbar-gutter: stable; }
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
@@ -269,6 +273,10 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .viewer-wrap {
   min-width: min-content;
 }
+
+/* 常驻滚动条槽位：内容高度跨过滚动条阈值时 clientWidth 不抖动，
+   否则「适应宽度」恰好在页面重建/清空的瞬间测量会量出偏大的可用宽度 */
+main { scrollbar-gutter: stable; }
 
 /* 放大后超宽时，滚动条始终可见，避免用户以为没反应 */
 main::-webkit-scrollbar { width: 10px; height: 10px; }

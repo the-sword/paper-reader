@@ -82,9 +82,10 @@ export default function App() {
 
   const clampScale = (v: number) => Math.max(SCALE_MIN, Math.min(SCALE_MAX, +v.toFixed(2)))
 
-  const fitWidth = useCallback(() => {
+  /** 实际完成拟合返回 true；元素/基准未就绪返回 false，供调用方决定是否记账 */
+  const fitWidth = useCallback((): boolean => {
     const el = mainRef.current
-    if (!el) return
+    if (!el) return false
     let base = baseWidth
     if (!base) {
       // 基准未就绪（刚打开/刚切视图）时从已渲染页反推，保证按钮立即生效；
@@ -93,12 +94,13 @@ export default function App() {
       const sf = page ? parseFloat(getComputedStyle(page).getPropertyValue('--scale-factor')) : NaN
       if (page?.offsetWidth && sf > 0) base = page.offsetWidth / sf
     }
-    if (!base || base <= 0) return
+    if (!base || base <= 0) return false
     const avail = el.clientWidth - 24
-    if (avail <= 0) return
+    if (avail <= 0) return false
     // 手机上允许缩得更小（0.15），PDF 才能适应窄屏宽度而非横向滚动
     const minScale = isMobile ? 0.15 : SCALE_MIN
     setScale(Math.max(minScale, Math.min(SCALE_MAX, +(avail / base).toFixed(2))))
+    return true
   }, [baseWidth, isMobile])
 
   // PdfViewer 测得基准宽：盖章「文档id:视图」。从 store 实时读文档，
@@ -151,11 +153,13 @@ export default function App() {
     }).catch(() => setViewPrefLoaded(true))
   }, [])
 
-  // 切换文献：只重置缩放，不再强制切换视图
+  // 切换文献：只重置缩放，不再强制切换视图。
+  // 依赖用 id 而非 currentDoc 对象：refreshCurrentDocMeta 会换新对象，
+  // 若按对象重置会把 onBaseWidth 已盖好的基准清掉且不再重报
   useEffect(() => {
     if (!currentDoc) return
     setBaseSize(null)
-  }, [currentDoc])
+  }, [currentDoc?.id])
 
   // 把主题应用到 <html>，使整个应用（含侧栏/顶栏）跟随
   useEffect(() => {
@@ -168,14 +172,18 @@ export default function App() {
   }, [readerPrefs.theme])
 
   // 进入/退出专注模式时可用宽度变化 → 重新适应宽度。
-  // 注意：不能把 baseWidth 置 null，否则 fitWidth 会因缺少基准而直接 return，
-  // 表现为「适应宽度失效」。这里保留基准，仅重新计算缩放。
+  // 依赖只挂 focusMode 并经由 ref 取最新 fitWidth：
+  // 若挂 fitWidth，baseWidth 每次更新都会触发本 effect 在 50ms 后二次拟合，
+  // 恰好撞上 PdfViewer 重建清空页面、滚动条瞬时消失的窗口，量出偏大的
+  // clientWidth 导致缩放溢出（横向滚动条）
+  const fitWidthRef = useRef(fitWidth)
+  fitWidthRef.current = fitWidth
   const focusFirstRun = useRef(true)
   useEffect(() => {
     if (focusFirstRun.current) { focusFirstRun.current = false; return }
-    const t = window.setTimeout(() => fitWidth(), 50)
+    const t = window.setTimeout(() => { fitWidthRef.current() }, 50)
     return () => window.clearTimeout(t)
-  }, [focusMode, fitWidth])
+  }, [focusMode])
 
   // 打开文档后自动收起移动端列表抽屉（桌面端 showList 不参与渲染，无副作用）
   const openedDocId = currentDoc?.id
@@ -275,8 +283,8 @@ export default function App() {
     if (!currentDoc || !baseWidth) return
     const key = `${currentDoc.id}:${view}`
     if (lastFitFor.current === key) return
-    lastFitFor.current = key
-    fitWidth()
+    // 拟合真正执行后再记账：若因布局未就绪被跳过，不能白消费这个 key
+    if (fitWidth()) lastFitFor.current = key
   }, [currentDoc, baseWidth, fitWidth, view])
 
   useEffect(() => {
