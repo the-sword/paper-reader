@@ -396,11 +396,11 @@ export default function App() {
         )}
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          {/* 专注阅读：一键收起两侧栏 */}
+          {/* 专注阅读：收起左侧栏与文档列表；右侧笔记面板仍可由 📝 开关 */}
           <button
             className={`btn-ghost ${focusMode ? 'active' : ''}`}
             style={{ padding: '4px 8px', fontSize: 11 }}
-            title={focusMode ? '退出专注模式 (Esc)' : '专注阅读：收起两侧栏'}
+            title={focusMode ? '退出专注模式 (Esc)' : '专注阅读：收起左侧栏，正文最大化'}
             onClick={() => setFocusMode((v) => !v)}
           >{focusMode ? '收起' : '专注'}</button>
 

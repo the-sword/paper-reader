@@ -16,6 +16,7 @@ export default function RightPanel({ width }: { width: number }) {
 
   return (
     <aside
+      className="right-panel"
       style={{
         width, flexShrink: 0, borderLeft: '1px solid var(--border)',
         display: 'flex', flexDirection: 'column', background: 'var(--bg-side)',

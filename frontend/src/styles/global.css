@@ -771,7 +771,7 @@ main::-webkit-scrollbar-track { background: transparent; }
 
 /* 专注阅读模式：隐藏非核心 UI */
 .focus-mode .app-sidebar,
-.focus-mode aside,
+.focus-mode aside:not(.right-panel),
 .focus-mode .doc-list,
 .focus-mode .resizer {
   display: none !important;
