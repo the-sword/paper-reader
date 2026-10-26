@@ -465,9 +465,12 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
         annLayer.dataset.page = String(pageNum)
         pageEl.appendChild(annLayer)
 
+        // pdf.js 4.x 不会按位图尺寸自动放大：位图放大 ratio 倍时必须显式传缩放矩阵，
+        // 否则内容只画在位图左上角 1/ratio 区域（高 DPR 屏上页面缩成一角、大片空白）
         await page.render({
           canvasContext: canvas.getContext('2d')!,
           viewport: vp,
+          transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : undefined,
           canvas,
         } as never).promise
         if (cancelled) return
