@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore, filterBySmartView, sortDocuments, type LibrarySort, type SmartView } from '../stores/useStore'
 import { api, type DocumentMeta } from '../api/client'
 import Sidebar from './Sidebar'
-import LibraryList from './LibraryList'
+import LibraryList, { MobileDocCard } from './LibraryList'
 import LibraryPreview from './LibraryPreview'
-import { Icon, PATH_CHEVRON_DOWN, PATH_SEARCH, PATH_UPLOAD } from './icons'
+import { Icon, PATH_CHEVRON_DOWN, PATH_PLUS, PATH_SEARCH, PATH_UPLOAD } from './icons'
 
 /** 智能视图的展示名（与 Sidebar 保持一致） */
 const SMART_TITLES: Record<SmartView, string> = {
@@ -28,16 +28,20 @@ const DRAWER_W = 260
 interface Props {
   isMobile: boolean
   onOpenArxiv: () => void
+  /** 手机端没有 ⌘K 快捷键：顶部搜索按钮打开命令面板 */
+  onOpenPalette: () => void
 }
 
 /** 书库页：智能视图 / 文件夹 / 标签（左）+ 文献列表（中）+ 预览（右，桌面端） */
-export default function LibraryView({ isMobile, onOpenArxiv }: Props) {
+export default function LibraryView({ isMobile, onOpenArxiv, onOpenPalette }: Props) {
   const documents = useStore((s) => s.documents)
+  const allDocuments = useStore((s) => s.allDocuments)
   const folders = useStore((s) => s.folders)
   const tags = useStore((s) => s.tags)
   const loading = useStore((s) => s.loading)
   const search = useStore((s) => s.search)
   const setSearch = useStore((s) => s.setSearch)
+  const setSmartView = useStore((s) => s.setSmartView)
   const smartView = useStore((s) => s.smartView)
   const activeFolder = useStore((s) => s.activeFolder)
   const activeTag = useStore((s) => s.activeTag)
@@ -116,6 +120,150 @@ export default function LibraryView({ isMobile, onOpenArxiv }: Props) {
 
   const listEmpty = !loading && visible.length === 0
   const emptyLibrary = listEmpty && documents.length === 0 && smartView === 'all' && !activeFolder && !activeTag && !search
+
+  if (isMobile) {
+    // 最近打开且有阅读记录的文档：「继续阅读」卡片
+    const continueDoc = allDocuments
+      .filter((d) => d.opened_at && pagePos[d.id])
+      .sort((a, b) => (b.opened_at ?? '').localeCompare(a.opened_at ?? ''))[0]
+    const pagesOf = continueDoc?.page_count ?? 0
+    const pct = continueDoc && pagesOf ? Math.min(100, (pagePos[continueDoc.id] / pagesOf) * 100) : 0
+    const mobileChips: Array<{ value: SmartView | null; label: string }> = [
+      ...(Object.keys(SMART_TITLES) as SmartView[]).map((v) => ({ value: v, label: SMART_TITLES[v] })),
+      { value: null, label: '筛选' },
+    ]
+    return (
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
+        <input
+          ref={fileRef} type="file" accept="application/pdf" multiple hidden
+          onChange={(e) => e.target.files && void doUpload(e.target.files)}
+        />
+        <div style={{ padding: 'calc(env(safe-area-inset-top) + 14px) 16px 0', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ flex: 1, fontSize: 22, fontWeight: 700, color: 'var(--fg-strong)' }}>书库</span>
+            <button className="btn-ghost" title="搜索与命令" onClick={onOpenPalette}
+              style={{ width: 36, height: 36, padding: 0, borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Icon d={PATH_SEARCH} size={16} />
+            </button>
+            <div style={{ position: 'relative' }}>
+              <button className="btn-primary" title="导入论文" onClick={() => setMenuOpen((v) => !v)} disabled={uploading}
+                style={{ width: 36, height: 36, padding: 0, borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Icon d={PATH_PLUS} size={16} />
+              </button>
+              {menuOpen && (
+                <div
+                  onMouseLeave={() => setMenuOpen(false)}
+                  style={{
+                    position: 'absolute', right: 0, top: 42, zIndex: 30, minWidth: 170,
+                    background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+                    boxShadow: 'var(--shadow-pop)', padding: 4,
+                  }}
+                >
+                  <div className="cmd-item" onClick={() => { setMenuOpen(false); fileRef.current?.click() }}>
+                    <Icon d={PATH_UPLOAD} size={13} /> 上传 PDF
+                  </div>
+                  <div className="cmd-item" onClick={() => { setMenuOpen(false); onOpenArxiv() }}>
+                    <Icon d={PATH_SEARCH} size={13} /> 从 arXiv 搜索
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="搜索标题…"
+            style={{ width: '100%', marginTop: 12, fontSize: 14, padding: '9px 14px', borderRadius: 999 }}
+          />
+
+          {/* 智能视图：横向滑动的 chips，最右为「筛选」（打开文件夹 / 标签抽屉） */}
+          <div style={{
+            display: 'flex', gap: 6, overflowX: 'auto', margin: '10px -16px 0', padding: '0 16px 12px',
+            scrollbarWidth: 'none',
+          }}>
+            {mobileChips.map((c) => {
+              const active = c.value !== null && smartView === c.value && !activeFolder && !activeTag
+              return (
+                <button
+                  key={c.label}
+                  onClick={() => (c.value ? setSmartView(c.value) : setShowFilter(true))}
+                  style={{
+                    flexShrink: 0, fontSize: 12, padding: '5px 12px', borderRadius: 999, whiteSpace: 'nowrap',
+                    border: active ? 'none' : '1px solid var(--border)',
+                    background: active ? 'var(--fg-strong)' : 'var(--bg)',
+                    color: active ? 'var(--bg)' : 'var(--fg)', cursor: 'pointer',
+                  }}
+                >{c.label}</button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div
+          onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) e.preventDefault() }}
+          onDrop={onDropFiles}
+          style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 16px calc(env(safe-area-inset-bottom) + 16px)' }}
+        >
+          {continueDoc && (
+            <div
+              onClick={() => void openDocument(continueDoc.id)}
+              style={{
+                marginBottom: 14, padding: 14, borderRadius: 12, cursor: 'pointer',
+                background: 'var(--bg-side)', border: '1px solid var(--border)',
+              }}
+            >
+              <div className="hint" style={{ fontSize: 11 }}>继续阅读</div>
+              <div style={{
+                fontSize: 14, fontWeight: 600, color: 'var(--fg-strong)', marginTop: 4, lineHeight: 1.4,
+                overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+              }}>{continueDoc.title}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+                <span style={{ fontSize: 11, color: 'var(--fg-muted)', whiteSpace: 'nowrap' }}>
+                  p.{pagePos[continueDoc.id]} / {pagesOf || '–'}
+                </span>
+                <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'var(--bg-active)' }}>
+                  <div style={{ width: `${pct}%`, height: '100%', borderRadius: 2, background: 'var(--accent)' }} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {loading && <div className="hint" style={{ padding: 12 }}>加载中…</div>}
+          {emptyLibrary ? (
+            <div style={{ textAlign: 'center', padding: '48px 12px' }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg-strong)', marginBottom: 8 }}>书库还是空的</div>
+              <div className="hint" style={{ marginBottom: 16 }}>点击右上角「＋」导入 PDF</div>
+            </div>
+          ) : listEmpty ? (
+            <div className="hint" style={{ padding: 24, textAlign: 'center' }}>此视图下没有论文</div>
+          ) : (
+            visible.map((d) => (
+              <MobileDocCard
+                key={d.id}
+                doc={d}
+                lastPage={pagePos[d.id]}
+                onOpen={() => void openDocument(d.id)}
+                onDelete={() => void deleteDoc(d)}
+              />
+            ))
+          )}
+        </div>
+
+        {showFilter && (
+          <>
+            <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 60 }} onClick={() => setShowFilter(false)} />
+            <div className="doc-drawer" style={{
+              position: 'fixed', left: 0, top: 0, bottom: 'calc(56px + env(safe-area-inset-bottom))', zIndex: 61,
+              width: DRAWER_W, boxShadow: '2px 0 16px rgba(0,0,0,.35)', display: 'flex',
+            }}>
+              <Sidebar width={DRAWER_W} />
+            </div>
+          </>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0, background: 'var(--bg)' }}>

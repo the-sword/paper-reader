@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { DocumentMeta } from '../api/client'
 import { Icon, PATH_TRASH } from './icons'
 
@@ -136,5 +136,81 @@ export default function LibraryList({ docs, selectedId, pagePos, isMobile, onSel
         />
       ))}
     </>
+  )
+}
+
+/** 手机端长按多久触发删除确认（毫秒） */
+const LONG_PRESS_MS = 500
+
+interface CardProps {
+  doc: DocumentMeta
+  lastPage: number | undefined
+  onOpen: () => void
+  onDelete: () => void
+}
+
+/**
+ * 手机书库的卡片：轻点打开，长按（500ms）触发删除确认（由调用方 confirm）。
+ * 底部 3px 进度条表示阅读进度；滚动时浏览器会取消指针事件，自然不会误触长按。
+ */
+export function MobileDocCard({ doc, lastPage, onOpen, onDelete }: CardProps) {
+  const timer = useRef<number | null>(null)
+  const longPressed = useRef(false)
+  const pages = doc.page_count ?? 0
+  const fraction = lastPage && pages ? Math.min(1, lastPage / pages) : 0
+  const metaParts = [
+    `${doc.page_count ?? '?'} 页`,
+    `添加于 ${shortDate(doc.added_at)}`,
+    lastPage ? `上次 p.${lastPage}` : '',
+  ].filter(Boolean)
+
+  const cancelTimer = (): void => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current)
+      timer.current = null
+    }
+  }
+
+  return (
+    <div
+      data-doc-id={doc.id}
+      onClick={() => {
+        if (longPressed.current) { longPressed.current = false; return }
+        onOpen()
+      }}
+      onPointerDown={() => {
+        longPressed.current = false
+        cancelTimer()
+        timer.current = window.setTimeout(() => {
+          longPressed.current = true
+          onDelete()
+        }, LONG_PRESS_MS)
+      }}
+      onPointerUp={cancelTimer}
+      onPointerLeave={cancelTimer}
+      onPointerCancel={cancelTimer}
+      style={{
+        position: 'relative', overflow: 'hidden', cursor: 'pointer',
+        padding: '12px 14px 14px', marginBottom: 10, borderRadius: 12,
+        border: '1px solid var(--border)', background: 'var(--bg)',
+      }}
+    >
+      <div style={{
+        fontSize: 14, fontWeight: 600, color: 'var(--fg-strong)', lineHeight: 1.4,
+        overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+      }}>{doc.title}</div>
+      <div className="hint" style={{ fontSize: 11, marginTop: 4 }}>{metaParts.join(' · ')}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6, alignItems: 'center' }}>
+        <ParseBadge status={doc.parse_status} />
+        {doc.bilingual_ready && <span className="badge ok">双语✓</span>}
+        {(doc.annotation_count ?? 0) > 0 && <span className="badge">笔记 {doc.annotation_count}</span>}
+        {doc.tags.slice(0, 2).map((t) => (
+          <span key={t.id} className="badge" style={{ color: t.color, borderColor: `${t.color}66` }}>{t.name}</span>
+        ))}
+      </div>
+      <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 3, background: 'var(--bg-active)' }}>
+        <div style={{ width: `${fraction * 100}%`, height: '100%', background: 'var(--accent)' }} />
+      </div>
+    </div>
   )
 }

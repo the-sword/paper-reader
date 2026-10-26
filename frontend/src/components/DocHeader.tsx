@@ -7,7 +7,7 @@ import {
   Icon, PATH_CHEVRON_LEFT, PATH_DOWNLOAD, PATH_FOCUS, PATH_PANEL_RIGHT, PATH_PANEL_LEFT,
 } from './icons'
 
-export type ViewMode = 'pdf' | 'bilingual'
+export type ViewMode = 'pdf' | 'bilingual' | 'zh'
 
 interface Props {
   view: ViewMode
@@ -53,14 +53,15 @@ export default function DocHeader(props: Props) {
     `添加于 ${shortDate(currentDoc.added_at)}`,
   ].join(' · ')
 
-  const onBilingualClick = () => {
-    if (biReady) onViewChange('bilingual')
-    else void bilingual.start()
+  /** 双语 / 译文：已生成则切换，未生成则触发生成（完成后切到被点的视图） */
+  const onDualClick = (target: 'bilingual' | 'zh') => {
+    if (biReady) onViewChange(target)
+    else void bilingual.start(target)
   }
 
-  const bilingualLabel = bilingual.running
-    ? `生成中 ${Math.round(bilingual.progress)}%`
-    : '双语'
+  /** 生成中只在被点的那个按钮上显示进度 */
+  const dualLabel = (target: 'bilingual' | 'zh', text: string): string =>
+    bilingual.running && bilingual.target === target ? `生成中 ${Math.round(bilingual.progress)}%` : text
 
   return (
     <header className="reader-header">
@@ -95,12 +96,21 @@ export default function DocHeader(props: Props) {
           className={`seg ${view === 'pdf' ? 'active' : ''}`}
           onClick={() => onViewChange('pdf')}
         >原文</button>
+        {/* 手机端双栏太窄：不显示双语，偏好为双语时实际使用译文视图 */}
+        {!isMobile && (
+          <button
+            className={`seg ${view === 'bilingual' ? 'active' : ''}`}
+            title={biReady ? '在页面内阅读双语 PDF（保留原排版）' : '生成保留原排版的双语 PDF'}
+            onClick={() => onDualClick('bilingual')}
+            disabled={bilingual.running}
+          >{dualLabel('bilingual', '双语')}</button>
+        )}
         <button
-          className={`seg ${view === 'bilingual' ? 'active' : ''}`}
-          title={biReady ? '在页面内阅读双语 PDF（保留原排版）' : '生成保留原排版的双语 PDF'}
-          onClick={onBilingualClick}
+          className={`seg ${view === 'zh' ? 'active' : ''}`}
+          title={biReady ? '只看右半译文列' : '生成双语 PDF 后可看译文列'}
+          onClick={() => onDualClick('zh')}
           disabled={bilingual.running}
-        >{bilingualLabel}</button>
+        >{dualLabel('zh', '译文')}</button>
       </div>
 
       {!isMobile && biReady && (

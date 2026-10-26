@@ -16,6 +16,10 @@ interface Props {
   /** 当前页码（由阅读区的页码导航提供） */
   page: number
   pageCount: number
+  /** 手机抽屉内使用：撑满宽度、去掉右侧分隔线 */
+  fluid?: boolean
+  /** 跳页后的回调（手机端用于关闭目录抽屉） */
+  onNavigate?: () => void
 }
 
 interface OutlineItem {
@@ -54,7 +58,7 @@ function sectionColor(items: OutlineItem[], i: number, anns: Annotation[]): stri
   return anns.find((a) => a.page >= from && a.page <= to)?.color ?? null
 }
 
-export default function OutlinePanel({ page, pageCount }: Props) {
+export default function OutlinePanel({ page, pageCount, fluid = false, onNavigate }: Props) {
   const currentDoc = useStore((s) => s.currentDoc)
   const segments = useStore((s) => s.segments)
   const annotations = useStore((s) => s.annotations)
@@ -62,6 +66,10 @@ export default function OutlinePanel({ page, pageCount }: Props) {
   const startParse = useStore((s) => s.startParse)
   const pagePos = useStore((s) => s.pagePos)
   const [tab, setTab] = useState<'outline' | 'notes'>('outline')
+  const jumpTo = (p: number): void => {
+    requestJump(p)
+    onNavigate?.()
+  }
 
   const items = useMemo(() => buildOutline(segments), [segments])
   const current = currentSectionIndex(items, page)
@@ -78,8 +86,8 @@ export default function OutlinePanel({ page, pageCount }: Props) {
 
   return (
     <aside style={{
-      width: 220, flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0,
-      background: 'var(--bg-side)', borderRight: '1px solid var(--border)',
+      width: fluid ? '100%' : 220, flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0,
+      background: 'var(--bg-side)', borderRight: fluid ? 'none' : '1px solid var(--border)',
     }}>
       <div style={{ padding: 10, flexShrink: 0 }}>
         <div style={{ display: 'flex', background: 'var(--bg-canvas)', borderRadius: 7, padding: 2 }}>
@@ -120,7 +128,7 @@ export default function OutlinePanel({ page, pageCount }: Props) {
               return (
                 <div
                   key={it.id}
-                  onClick={() => requestJump(it.page)}
+                  onClick={() => jumpTo(it.page)}
                   title={it.title}
                   style={{
                     position: 'relative', display: 'flex', alignItems: 'center', gap: 6,
@@ -154,7 +162,7 @@ export default function OutlinePanel({ page, pageCount }: Props) {
             {sortedAnns.map((a) => (
               <div
                 key={a.id}
-                onClick={() => requestJump(a.page)}
+                onClick={() => jumpTo(a.page)}
                 style={{
                   padding: '7px 8px 7px 10px', marginBottom: 6, borderRadius: 6, cursor: 'pointer',
                   borderLeft: `3px solid ${a.color}`, background: 'var(--bg)',

@@ -7,6 +7,9 @@ const POLL_MS = 1500
 /** 启动任务时的初始进度（百分比） */
 const START_PROGRESS = 5
 
+/** 双语 PDF 生成完成后切换到的目标视图：双栏（双语）或译文列 */
+export type BilingualTarget = 'bilingual' | 'zh'
+
 export interface BilingualJob {
   /** 任务是否在跑 */
   running: boolean
@@ -14,24 +17,28 @@ export interface BilingualJob {
   progress: number
   /** 任务当前阶段描述 */
   message: string
+  /** 当前（或最近一次）任务的目标视图 */
+  target: BilingualTarget
   /** 各文档双语 PDF 是否已生成（按文档 id） */
   ready: Record<string, boolean>
-  /** 为当前文档启动生成任务 */
-  start: () => Promise<void>
+  /** 为当前文档启动生成任务；完成后以 target 回调 onDone */
+  start: (target?: BilingualTarget) => Promise<void>
   /** 取消正在进行的任务 */
   cancel: () => Promise<void>
 }
 
 /** 双语 PDF（BabelDOC）后台任务：启动、轮询进度、完成回调与取消 */
-export function useBilingualJob(onDone: () => void): BilingualJob {
+export function useBilingualJob(onDone: (target: BilingualTarget) => void): BilingualJob {
   const [jobId, setJobId] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState(0)
   const [message, setMessage] = useState('')
+  const [target, setTarget] = useState<BilingualTarget>('bilingual')
   const [ready, setReady] = useState<Record<string, boolean>>({})
   const pollRef = useRef<number | null>(null)
   const onDoneRef = useRef(onDone)
   onDoneRef.current = onDone
+  const targetRef = useRef<BilingualTarget>('bilingual')
 
   const currentDocId = useStore((s) => s.currentDoc?.id)
 
@@ -68,7 +75,7 @@ export function useBilingualJob(onDone: () => void): BilingualJob {
       if (st.status === 'done') {
         setReady((m) => ({ ...m, [docId]: true }))
         void useStore.getState().refreshLibrary()
-        onDoneRef.current()
+        onDoneRef.current(targetRef.current)
         return
       }
       useStore.setState({ error: `双语 PDF 生成失败：${st.error ?? '未知原因'}` })
@@ -78,9 +85,11 @@ export function useBilingualJob(onDone: () => void): BilingualJob {
     }
   }
 
-  const start = async (): Promise<void> => {
+  const start = async (target: BilingualTarget = 'bilingual'): Promise<void> => {
     const doc = useStore.getState().currentDoc
     if (!doc || running) return
+    targetRef.current = target
+    setTarget(target)
     setRunning(true); setProgress(START_PROGRESS); setMessage('启动任务')
     useStore.setState({ error: null })
     try {
@@ -99,5 +108,5 @@ export function useBilingualJob(onDone: () => void): BilingualJob {
     try { await api.cancelBabelDoc(jobId) } catch { /* 忽略 */ }
   }
 
-  return { running, progress, message, ready, start, cancel }
+  return { running, progress, message, target, ready, start, cancel }
 }

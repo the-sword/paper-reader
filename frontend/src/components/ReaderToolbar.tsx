@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type RefObject } from 'react'
-import { Icon, PATH_CHEVRON_LEFT, PATH_CHEVRON_RIGHT, PATH_FOCUS } from './icons'
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { Icon, PATH_CHEVRON_LEFT, PATH_CHEVRON_RIGHT, PATH_FOCUS, PATH_PANEL_LEFT } from './icons'
 
 /** 滚动停止多久后工具条重新浮现（毫秒） */
 const IDLE_SHOW_MS = 800
@@ -19,11 +19,17 @@ interface Props {
   onFitWidth: () => void
   focusMode: boolean
   onToggleFocus: () => void
+  /** 手机端变体：显隐由阅读 chrome 控制，不挂载自身的滚动监听 */
+  mobile?: boolean
+  chromeVisible?: boolean
+  onOpenOutline?: () => void
+  /** 手机端「Aa」阅读设置入口 */
+  settings?: ReactNode
 }
 
-/** 底部浮动工具条：页码 | 缩放 | 适应宽度 | 专注。滚动时淡出，停止后或鼠标靠近底部时浮现 */
+/** 底部浮动工具条：桌面为页码 | 缩放 | 适应宽度 | 专注，手机为页码 | 目录 | 缩放 | Aa */
 export default function ReaderToolbar(props: Props) {
-  const { mainRef, page, pageCount, scale, onGoTo } = props
+  const { mainRef, page, pageCount, scale, onGoTo, mobile = false } = props
   const [hidden, setHidden] = useState(false)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -31,7 +37,7 @@ export default function ReaderToolbar(props: Props) {
 
   useEffect(() => {
     const el = mainRef.current
-    if (!el) return
+    if (!el || mobile) return
     let timer = 0
     const onScroll = (): void => {
       window.clearTimeout(timer)
@@ -50,7 +56,7 @@ export default function ReaderToolbar(props: Props) {
       el.removeEventListener('scroll', onScroll)
       el.removeEventListener('mousemove', onMove)
     }
-  }, [mainRef])
+  }, [mainRef, mobile])
 
   const commitDraft = (): void => {
     const n = parseInt(draft, 10)
@@ -58,13 +64,15 @@ export default function ReaderToolbar(props: Props) {
     if (!Number.isNaN(n)) onGoTo(n)
   }
 
+  const isHidden = mobile ? props.chromeVisible === false : hidden
+
   const btn = (title: string, onClick: () => void, label: React.ReactNode, extra?: React.CSSProperties) => (
     <button className="tb-btn" title={title} onClick={onClick} style={extra}>{label}</button>
   )
 
   return (
     <div
-      className={`reader-toolbar${hidden ? ' hidden' : ''}`}
+      className={`reader-toolbar${isHidden ? ' hidden' : ''}${mobile ? ' mobile' : ''}`}
       onMouseEnter={() => { hoverRef.current = true; setHidden(false) }}
       onMouseLeave={() => { hoverRef.current = false }}
     >
@@ -91,15 +99,28 @@ export default function ReaderToolbar(props: Props) {
 
       <span className="tb-sep" />
 
-      {btn('缩小 (−)', props.onZoomOut, '−')}
-      {btn('回到 100%', props.onZoomReset, `${Math.round(scale * 100)}%`, { minWidth: 46, fontVariantNumeric: 'tabular-nums' })}
-      {btn('放大 (+)', props.onZoomIn, '+')}
+      {mobile ? (
+        <>
+          {btn('目录', props.onOpenOutline ?? (() => {}), <Icon d={PATH_PANEL_LEFT} size={14} />)}
+          <span className="tb-sep" />
+          {btn('缩小', props.onZoomOut, '−')}
+          {btn('放大', props.onZoomIn, '+')}
+          <span className="tb-sep" />
+          {props.settings}
+        </>
+      ) : (
+        <>
+          {btn('缩小 (−)', props.onZoomOut, '−')}
+          {btn('回到 100%', props.onZoomReset, `${Math.round(scale * 100)}%`, { minWidth: 46, fontVariantNumeric: 'tabular-nums' })}
+          {btn('放大 (+)', props.onZoomIn, '+')}
 
-      <span className="tb-sep" />
+          <span className="tb-sep" />
 
-      {btn('适应宽度 (0)', props.onFitWidth, '适应宽度')}
-      {btn(props.focusMode ? '退出专注 (Esc)' : '专注阅读 (f)', props.onToggleFocus,
-        <Icon d={PATH_FOCUS} size={14} />)}
+          {btn('适应宽度 (0)', props.onFitWidth, '适应宽度')}
+          {btn(props.focusMode ? '退出专注 (Esc)' : '专注阅读 (f)', props.onToggleFocus,
+            <Icon d={PATH_FOCUS} size={14} />)}
+        </>
+      )}
     </div>
   )
 }

@@ -14,8 +14,8 @@
   "handle_links": "preferred",
   "categories": ["education", "productivity", "utilities"],
   "prefer_related_applications": false,
-  "background_color": "#0f172a",
-  "theme_color": "#1e293b",
+  "background_color": "#F7F8FA",
+  "theme_color": "#F7F8FA",
   "icons": [
     {
       "src": "/icons/icon.svg",

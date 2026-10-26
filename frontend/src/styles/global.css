@@ -1141,11 +1141,78 @@ main::-webkit-scrollbar-track { background: transparent; }
   .nav-rail .nav-spacer { display: none; }
   .nav-item { width: auto; flex: 1; height: 56px; border-radius: 0; }
   .tab-bar { display: none; }
-  .reader-toolbar { bottom: 66px; }
+  /* 手机阅读视图隐藏底部导航（见 .app-shell.reading-view），悬浮元素贴底 */
+  .app-shell.reading-view .nav-rail { display: none; }
 }
 
 /* 专注阅读模式：隐藏导航轨与标签栏，DocHeader 与右栏保留 */
 .focus-mode .nav-rail,
 .focus-mode .tab-bar {
   display: none !important;
+}
+
+/* ---------- 译文视图：页元素为右半裁剪盒，完整几何仍按双栏页计算 ---------- */
+.pdf-page.pdf-half { overflow: hidden; }
+.pdf-page.pdf-half > canvas { position: absolute; left: -100%; top: 0; }
+.pdf-page.pdf-half > .textLayer,
+.pdf-page.pdf-half > .ann-layer { left: -100%; width: 200%; }
+
+/* ---------- 触屏划词：停靠在屏幕底部居中（阅读 chrome 之上） ---------- */
+.sel-float.docked {
+  top: auto;
+  left: 50%;
+  /* 位于悬浮 FAB（72–128px）之上 */
+  bottom: calc(env(safe-area-inset-bottom) + 136px);
+  transform: translateX(-50%);
+  flex-direction: column-reverse;
+  max-width: calc(100vw - 16px);
+}
+.sel-float.docked .sel-bubble {
+  width: auto;
+  max-width: calc(100vw - 16px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.sel-float.docked .sel-bubble::after { display: none; }
+.sel-float.docked .sel-trans-card { width: auto; max-width: calc(100vw - 16px); }
+
+/* ---------- 手机阅读：工具条与悬浮按钮 ---------- */
+.reader-toolbar.mobile {
+  bottom: calc(env(safe-area-inset-bottom) + 16px);
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+.reader-toolbar.mobile button.tb-btn { padding: 4px 6px; }
+.reader-toolbar.mobile.hidden {
+  opacity: 0;
+  transform: translate(-50%, 160%);
+  pointer-events: none;
+}
+.mobile-fab {
+  position: absolute;
+  right: 16px;
+  bottom: calc(env(safe-area-inset-bottom) + 72px);
+  z-index: 35;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  box-shadow: var(--shadow-pop);
+  cursor: pointer;
+  transition: opacity 200ms ease;
+}
+
+/* 手机外壳：底部导航与安全区 */
+@media (max-width: 767px) {
+  .app-shell { height: 100dvh; }
+  .nav-rail {
+    height: calc(56px + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
+    box-sizing: border-box;
+  }
 }

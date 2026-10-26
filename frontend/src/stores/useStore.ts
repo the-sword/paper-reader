@@ -230,7 +230,7 @@ export const useStore = create<State>((set, get) => ({
   smartView: 'all',
   librarySort: 'added',
   rightOpen: true,
-  rightTab: 'guide',
+  rightTab: 'chat',
   leftOpen: readLeftOpen(),
   jumpRequest: null,
   chatQuote: null,

@@ -9,7 +9,7 @@
  *   canvas 画出来的文字不是 DOM，鼠标选不中。pdf.js 的 TextLayer 把文字以
  *   透明 DOM 叠在 canvas 上，才能实现「选中原文 → 高亮」和后续的划词翻译。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clearStaleShellFlag, selfHealStaleShell } from '../lib/staleShell'
 import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
@@ -35,6 +35,24 @@ const NOTE_MERGE_RATIO = 0.01
 const NOTE_MARKER_GAP = 6
 const NOTE_MARKER_W = 34
 const NOTE_ICON = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${PATH_CHAT}"/></svg>`
+
+/** 选区 selectionchange 之后等待的防抖时长（毫秒），避免拖动手柄时频繁重算 */
+const SELECTION_DEBOUNCE_MS = 350
+
+/** 是否为触屏主输入（粗指针）设备 */
+function isCoarsePointer(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+}
+
+/**
+ * 页面完整几何：译文视图下页元素只是右半裁剪盒（宽 P），
+ * 完整页宽为 2P 且左移 P，选区换算与标注坐标都以完整页为准
+ */
+function fullPageRect(el: HTMLElement, half: boolean): { left: number; top: number; width: number; height: number } {
+  const b = el.getBoundingClientRect()
+  if (!half) return { left: b.left, top: b.top, width: b.width, height: b.height }
+  return { left: b.left - b.width, top: b.top, width: b.width * 2, height: b.height }
+}
 
 /** 键盘事件是否落在可输入元素上（此时不响应单键快捷键） */
 function isTypingTarget(t: EventTarget | null): boolean {
@@ -95,6 +113,8 @@ interface Props {
    *  左半 [0,0.5] 后 x*2 折回原页，渲染时 /2 画在原文半页，
    *  保证与 PDF 视图共用同一坐标系、互切不漂移。 */
   dualPage?: boolean
+  /** 译文视图：双语 PDF 只露出右半译文列（隐含 dualPage 的坐标约定） */
+  halfView?: 'zh'
 }
 
 interface Bubble {
@@ -117,6 +137,8 @@ interface Bubble {
   transError?: string
   /** 「复制」按钮的短暂反馈 */
   copied?: boolean
+  /** 触屏停靠模式：固定在屏幕底部 */
+  docked?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +273,16 @@ async function extractRefsFromPdf(pdf: PDFDocumentProxy): Promise<Record<number,
   return out
 }
 
-export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }: Props) {
+export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false, halfView }: Props) {
+  /** 译文视图：页元素为半宽裁剪盒，完整几何仍按双栏页计算 */
+  const halfMode = halfView === 'zh'
+  /** 双栏坐标约定（双语与译文视图共用：右半列为译文） */
+  const dualLike = dualPage || halfMode
+  /** 触屏设备：划词菜单停靠屏幕底部，不跟随选区 */
+  const coarse = useMemo(() => isCoarsePointer(), [])
+  // 异步回调里读取最新的译文模式（加载 effect 不依赖它，避免切换视图时重新下载 PDF）
+  const halfRef = useRef(halfMode)
+  halfRef.current = halfMode
   const hostRef = useRef<HTMLDivElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const pdfRef = useRef<PDFDocumentProxy | null>(null)
@@ -357,7 +388,7 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
         try {
           const first = await pdf.getPage(1)
           const base = first.getViewport({ scale: 1 }).width
-          if (!cancelled) onBaseWidth?.(base)
+          if (!cancelled) onBaseWidth?.(halfRef.current ? base / 2 : base)
         } catch { /* 忽略 */ }
       })
       .catch((e: unknown) => {
@@ -379,6 +410,15 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
       void task.destroy().catch(() => { /* 忽略重复销毁 */ })
     }
   }, [url, onBaseWidth])
+
+  // 同一文档在原文双栏 ↔ 译文之间切换：URL 不变，只补报一次与当前模式匹配的基准宽
+  useEffect(() => {
+    const pdf = pdfRef.current
+    if (!pdf || !numPages) return
+    void pdf.getPage(1)
+      .then((p) => onBaseWidth?.(p.getViewport({ scale: 1 }).width / (halfMode ? 2 : 1)))
+      .catch(() => { /* 忽略 */ })
+  }, [halfMode, numPages, onBaseWidth])
 
   // ---- 优先级渲染队列 ----
   // 同步建好全部页面占位（正确的宽高 → 滚动条立即稳定、首屏立即可交互），
@@ -440,7 +480,7 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
         // 用本页真实视口回写占位盒尺寸：占位值按首页近似尺寸建立，
         // 页面尺寸不一致（混合尺寸/扫描件）或比例变化时，不回写会
         // 造成内容比白纸盒宽/窄的错位
-        pageEl.style.width = `${vp.width}px`
+        pageEl.style.width = `${halfMode ? vp.width / 2 : vp.width}px`
         pageEl.style.height = `${vp.height}px`
         delete pageEl.dataset.needSize
 
@@ -501,9 +541,9 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
      *  双语页按 side 画到对应半页：source 折半画左半原文列，
      *  zh 折半偏移画右半译文列；单页视图都画原文位置 */
     const annX = (x: number, side?: string) =>
-      (dualPage ? (side === 'zh' ? 0.5 + x / 2 : x / 2) : x) * 100
+      (dualLike ? (side === 'zh' ? 0.5 + x / 2 : x / 2) : x) * 100
     const drawPageAnnotations = (layer: HTMLElement, pageNum: number) => {
-      const anns = annotationsRef.current.filter((a) => a.page === pageNum)
+      const anns = annotationsRef.current.filter((a) => a.page === pageNum && (!halfMode || a.side === 'zh'))
       for (const a of anns) {
         for (const r of a.rects) {
           const el = document.createElement('div')
@@ -539,11 +579,11 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
       const pageEls: HTMLElement[] = []
       for (let i = 1; i <= numPages; i++) {
         const pageEl = document.createElement('div')
-        pageEl.className = 'pdf-page pdf-page-placeholder'
+        pageEl.className = `pdf-page pdf-page-placeholder${halfMode ? ' pdf-half' : ''}`
         pageEl.dataset.page = String(i)
         // 近似尺寸：同文档页面绝大多数一致（双语 PDF 尤其如此）。
         // 真实视口在渲染该页时以实际尺寸为准替换占位样式。
-        pageEl.style.width = `${firstVpW * scale}px`
+        pageEl.style.width = `${(halfMode ? firstVpW / 2 : firstVpW) * scale}px`
         pageEl.style.height = `${firstVpH * scale}px`
         pageEl.dataset.needSize = '1'
         host.appendChild(pageEl)
@@ -574,7 +614,7 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
       cancelled = true
       ;(host as HTMLElement & { __pageIO?: IntersectionObserver }).__pageIO?.disconnect()
     }
-  }, [numPages, scale, dpr])
+  }, [numPages, scale, dpr, halfMode])
 
   // ---- 标注绘制 ----
   useEffect(() => {
@@ -583,13 +623,13 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
     host.querySelectorAll<HTMLElement>('.ann-layer').forEach((l) => (l.innerHTML = ''))
 
     const byPage: Record<number, Annotation[]> = {}
-    for (const a of annotations) (byPage[a.page] ||= []).push(a)
+    for (const a of annotations) if (!halfMode || a.side === 'zh') (byPage[a.page] ||= []).push(a)
 
     for (const [pageStr, anns] of Object.entries(byPage)) {
       const layer = host.querySelector<HTMLElement>(`.ann-layer[data-page="${pageStr}"]`)
       if (!layer) continue
       const annX = (x: number, side?: string) =>
-        (dualPage ? (side === 'zh' ? 0.5 + x / 2 : x / 2) : x) * 100
+        (dualLike ? (side === 'zh' ? 0.5 + x / 2 : x / 2) : x) * 100
       for (const a of anns) {
         for (const r of a.rects) {
           const el = document.createElement('div')
@@ -607,7 +647,7 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
       }
       appendNoteMarkers(layer, anns, (id) => markerClickRef.current(id))
     }
-  }, [annotations, numPages, scale, removeAnnotation])
+  }, [annotations, numPages, scale, removeAnnotation, halfMode, dualLike])
 
   // ---- 文本选区 → 气泡 ----
   /** 选区结束/取消后移除所有文本层的 .selecting，恢复 endOfContent 哨兵位置 */
@@ -616,9 +656,9 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
     root.querySelectorAll<HTMLElement>('.textLayer.selecting').forEach((l) => l.classList.remove('selecting'))
   }
 
-  const onMouseUp = useCallback(() => {
-    const sel = window.getSelection()
-    if (!sel || sel.isCollapsed) { setBubble(null); return }
+  /** 由当前选区计算划词菜单数据；无有效选区返回 null（鼠标与触屏共用） */
+  const buildBubble = useCallback((sel: Selection | null): Bubble | null => {
+    if (!sel || sel.isCollapsed) return null
 
     const range = sel.getRangeAt(0)
     const rects: number[][] = []
@@ -644,7 +684,7 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
       if (anchorPage && pageNum !== anchorPage) continue // 暂不支持跨页选区
       anchorPage = pageNum
 
-      const pr = pageEl.getBoundingClientRect()
+      const pr = fullPageRect(pageEl, halfMode)
       // 裁掉超出页面的部分（先保留页内 x，半侧归类在后面统一做）
       const x1 = Math.max(0, Math.min(1, (r.left - pr.left) / pr.width))
       const x2 = Math.max(0, Math.min(1, (r.right - pr.left) / pr.width))
@@ -654,22 +694,23 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
       rects.push([x1, y1, x2, y2])
     }
 
-    if (!rects.length || !anchorPage) { setBubble(null); return }
+    if (!rects.length || !anchorPage) return null
 
     // 双语页：按选区锚定半侧（第一个矩形中心）归到 source/zh；
     // 坐标统一折回原文页空间——原文列 x*2，译文列 (x-0.5)*2（版式镜像）；
     // 横跨中缝混入另一侧的矩形丢弃，保证一条标注只含一种半侧
     let side: 'source' | 'zh' = 'source'
-    if (dualPage) {
+    if (dualLike) {
       const f = rects[0]
-      side = (f[0] + f[2]) / 2 > 0.5 ? 'zh' : 'source'
+      // 译文视图只有右半列可见：锚定到译文列，左半列（被裁掉）的选区矩形被丢弃
+      side = halfMode || (f[0] + f[2]) / 2 > 0.5 ? 'zh' : 'source'
       const lx = (x: number) =>
         Math.max(0, Math.min(1, side === 'zh' ? (x - 0.5) * 2 : x * 2))
       const mapped = rects
         .filter((r) => ((r[0] + r[2]) / 2 > 0.5) === (side === 'zh'))
         .map((r) => [lx(r[0]), r[1], lx(r[2]), r[3]] as number[])
         .filter((r) => r[2] - r[0] > 0.001)
-      if (!mapped.length) { setBubble(null); return }
+      if (!mapped.length) return null
       rects.splice(0, rects.length, ...mapped)
     }
 
@@ -701,7 +742,7 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
       window.innerWidth - BUBBLE_HALF_W - BUBBLE_EDGE,
     )
     const below = whole.top < BUBBLE_FLIP_TOP
-    setBubble({
+    return {
       x,
       y: below ? whole.bottom + 12 : first.top - 12,
       below,
@@ -710,8 +751,42 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
       rects,
       side,
       quote: sel.toString().trim().slice(0, 2000),
-    })
-  }, [dualPage])
+    }
+  }, [dualLike, halfMode])
+
+  const onMouseUp = useCallback(() => {
+    // 触屏设备的菜单由 selectionchange 生成（停靠底部），鼠标事件不再处理
+    if (coarse) return
+    setBubble(buildBubble(window.getSelection()))
+  }, [buildBubble, coarse])
+
+  // 触屏：长按选字后（防抖）生成停靠菜单，固定在屏幕底部居中
+  useEffect(() => {
+    if (!coarse) return
+    let timer = 0
+    const onChange = (): void => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        const b = buildBubble(window.getSelection())
+        if (b) setBubble({ ...b, docked: true, below: false, x: window.innerWidth / 2, y: 0, arrowX: 0 })
+      }, SELECTION_DEBOUNCE_MS)
+    }
+    document.addEventListener('selectionchange', onChange)
+    return () => {
+      document.removeEventListener('selectionchange', onChange)
+      window.clearTimeout(timer)
+    }
+  }, [coarse, buildBubble])
+
+  // 停靠菜单：点击菜单外部即关闭（点菜单内部不关闭，以免清空选区后按钮失效）
+  useEffect(() => {
+    if (!bubble?.docked) return
+    const onDown = (e: PointerEvent): void => {
+      if (!(e.target as HTMLElement).closest('.sel-float')) setBubble(null)
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [bubble?.docked])
 
   /** 划词翻译（手动触发） */
   const translateSelection = async () => {
@@ -853,8 +928,8 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
       <div className="canvas-host" ref={hostRef} />
       {bubble && (
         <div
-          className={`sel-float${bubble.below ? ' below' : ''}`}
-          style={{ left: bubble.x, top: bubble.y }}
+          className={`sel-float${bubble.below ? ' below' : ''}${bubble.docked ? ' docked' : ''}`}
+          style={bubble.docked ? undefined : { left: bubble.x, top: bubble.y }}
           onMouseDown={(e) => e.stopPropagation()}
           onMouseUp={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}

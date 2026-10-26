@@ -3,7 +3,9 @@ import PdfViewer from './components/PdfViewer'
 import SettingsDialog from './components/SettingsDialog'
 import ArxivPanel from './components/ArxivPanel'
 import RadarView from './components/RadarView'
-import { DEFAULT_READER_PREFS, type ReaderPrefs } from './components/ReaderSettings'
+import ReaderSettings, { DEFAULT_READER_PREFS, type ReaderPrefs } from './components/ReaderSettings'
+import BottomSheet, { type SheetSnap } from './components/BottomSheet'
+import { Icon, PATH_SPARKLE } from './components/icons'
 import RightPanel from './components/RightPanel'
 import OutlinePanel from './components/OutlinePanel'
 import Resizer from './components/Resizer'
@@ -14,7 +16,8 @@ import ReaderToolbar from './components/ReaderToolbar'
 import CommandPalette, { type PaletteCommand } from './components/CommandPalette'
 import LibraryView from './components/LibraryView'
 import { useStore } from './stores/useStore'
-import { useBilingualJob } from './hooks/useBilingualJob'
+import { useBilingualJob, type BilingualTarget } from './hooks/useBilingualJob'
+import { useReadingChrome } from './hooks/useReadingChrome'
 import { usePdfPageNav } from './hooks/usePdfPageNav'
 import { api } from './api/client'
 
@@ -28,9 +31,6 @@ const SCALE_MAX = 4
 const SCALE_STEP = 0.15
 /** 手机端允许缩到的最小比例，保证 PDF 能适应窄屏宽度 */
 const MOBILE_SCALE_MIN = 0.15
-/** 手机端抽屉宽度：视口的 85%，限定在 [260, 340] */
-const DRAWER_MIN_W = 260
-const DRAWER_MAX_W = 340
 /** 跳页定位后目标页闪烁描边的时长（毫秒） */
 const FLASH_MS = 600
 
@@ -70,6 +70,12 @@ export default function App() {
   const setRightOpen = useStore((s) => s.setRightOpen)
   const leftOpen = useStore((s) => s.leftOpen)
   const jumpRequest = useStore((s) => s.jumpRequest)
+  const rightTab = useStore((s) => s.rightTab)
+  const openRight = useStore((s) => s.openRight)
+  /** 手机端 AI 抽屉与目录抽屉的吸附档位（各自独立） */
+  const [sheetSnap, setSheetSnap] = useState<SheetSnap>('half')
+  const [outlineOpen, setOutlineOpen] = useState(false)
+  const [outlineSnap, setOutlineSnap] = useState<SheetSnap>('half')
 
   const [scale, setScale] = useState(1.0)
   const [panelPrefsLoaded, setPanelPrefsLoaded] = useState(false)
@@ -85,8 +91,11 @@ export default function App() {
   const [focusMode, setFocusMode] = useState(false)
   /** 窄屏（手机）下笔记面板改为抽屉浮层 */
   const [isMobile, setIsMobile] = useState(false)
-  const [vw, setVw] = useState(0)
-  const [view, setView] = useState<ViewMode>('pdf')
+  const [viewPref, setView] = useState<ViewMode>('pdf')
+  /** 手机端双栏太窄：偏好为双语时实际显示译文列（不改写偏好） */
+  const view: ViewMode = isMobile && viewPref === 'bilingual' ? 'zh' : viewPref
+  const viewRef = useRef<ViewMode>(view)
+  viewRef.current = view
 
   const mainRef = useRef<HTMLElement>(null)
   // 基准宽按「文档id:视图」盖章。文档刚切换的瞬间旧文档的基准还留在状态里，
@@ -128,18 +137,15 @@ export default function App() {
 
   // PdfViewer 测得基准宽：盖章「文档id:视图」。从 store 实时读文档，
   // 回调身份恒定（deps 为空），不会引起 PdfViewer 加载 effect 的重跑
-  const onBaseWidthPdf = useCallback((w: number) => {
+  // 盖章键取当前视图（viewRef），同一回调服务于原文 / 双语 / 译文三种视图
+  const onBaseWidth = useCallback((w: number) => {
     const d = useStore.getState().currentDoc
-    if (d) setBaseSize({ key: `${d.id}:pdf`, w })
-  }, [])
-  const onBaseWidthBilingual = useCallback((w: number) => {
-    const d = useStore.getState().currentDoc
-    if (d) setBaseSize({ key: `${d.id}:bilingual`, w })
+    if (d) setBaseSize({ key: `${d.id}:${viewRef.current}`, w })
   }, [])
 
-  const onBilingualDone = useCallback((): void => {
+  const onBilingualDone = useCallback((target: BilingualTarget): void => {
     setBaseSize(null)
-    setView('bilingual')
+    setView(target)
   }, [])
   const bilingual = useBilingualJob(onBilingualDone)
 
@@ -150,10 +156,14 @@ export default function App() {
   // 快捷键回调需要最新的页码导航，用 ref 避免频繁重绑监听
   const pageNavRef = useRef(pageNav)
   pageNavRef.current = pageNav
+  /** 手机阅读的顶栏与工具条显隐（轻点 / 滚动） */
+  const chromeVisible = useReadingChrome(mainRef, isMobile && mainView === 'reader')
 
   // 目录 / 标注 / 页码引用的跳页请求：滚动到该页并闪烁描边 600ms
   useEffect(() => {
     if (!jumpRequest) return
+    // 手机端从 AI 抽屉点引用跳页：抽屉收到半屏，让读者看到页面
+    if (isMobile) setSheetSnap('half')
     pageNavRef.current.goTo(jumpRequest.page)
     const el = mainRef.current?.querySelector<HTMLElement>(`.pdf-page[data-page="${jumpRequest.page}"]`)
     if (!el) return
@@ -162,13 +172,12 @@ export default function App() {
     el.classList.add('pdf-flash')
     const t = window.setTimeout(() => el.classList.remove('pdf-flash'), FLASH_MS)
     return () => window.clearTimeout(t)
-  }, [jumpRequest])
+  }, [jumpRequest, isMobile])
 
   useEffect(() => {
     const onResize = (): void => {
       const w = window.innerWidth
       setIsMobile(w < MOBILE)
-      setVw(w)
       // 手机端抽屉默认收起；桌面端由偏好决定（见下方偏好加载）
       if (w < MOBILE) setRightOpen(false)
     }
@@ -181,17 +190,19 @@ export default function App() {
   useEffect(() => {
     void api.getPrefs().then(({ values }) => {
       // 'reading' 视图已停用，历史偏好回落为 pdf
-      if (values.view_mode === 'pdf' || values.view_mode === 'bilingual') {
+      if (values.view_mode === 'pdf' || values.view_mode === 'bilingual' || values.view_mode === 'zh') {
         setView(values.view_mode)
       }
       if (typeof values.reader_theme === 'string') {
         setReaderPrefs((p) => ({ ...p, theme: values.reader_theme as ReaderPrefs['theme'] }))
       }
       if (typeof values.panel_notes === 'number') setWNotes(values.panel_notes)
-      // 右栏显隐：有偏好用偏好，否则宽屏默认展开
-      setRightOpen(typeof values.panel_notes_visible === 'boolean'
-        ? values.panel_notes_visible
-        : window.innerWidth >= VERY_NARROW)
+      // 右栏显隐：有偏好用偏好，否则宽屏默认展开；手机端抽屉始终默认收起（偏好只约束桌面）
+      if (window.innerWidth >= MOBILE) {
+        setRightOpen(typeof values.panel_notes_visible === 'boolean'
+          ? values.panel_notes_visible
+          : window.innerWidth >= VERY_NARROW)
+      }
       setPanelPrefsLoaded(true)
       setViewPrefLoaded(true)
     }).catch(() => setViewPrefLoaded(true))
@@ -378,8 +389,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentDoc, focusMode, readerPrefs.theme, bilingual.ready, view, isMobile, rightOpen, leftOpen])
 
-  const drawerW = Math.min(DRAWER_MAX_W, Math.max(DRAWER_MIN_W, Math.round(vw * 0.85)))
-
   /** 阅读区主体：无文档 / 双语未生成时给提示，否则渲染 PDF */
   const renderReaderBody = () => {
     if (!currentDoc) {
@@ -389,11 +398,11 @@ export default function App() {
         </div>
       )
     }
-    if (view === 'bilingual') {
+    if (view === 'bilingual' || view === 'zh') {
       if (!bilingual.ready[currentDoc.id]) {
         return (
           <div className="hint" style={{ padding: 40, textAlign: 'center' }}>
-            尚未生成双语 PDF，请点击顶部「双语」生成
+            尚未生成双语 PDF，请点击顶部「双语」或「译文」生成
           </div>
         )
       }
@@ -401,8 +410,9 @@ export default function App() {
         <PdfViewer
           url={api.babelDocPdfUrl(currentDoc.id)}
           scale={scale}
-          onBaseWidth={onBaseWidthBilingual}
-          dualPage
+          onBaseWidth={onBaseWidth}
+          dualPage={view === 'bilingual'}
+          halfView={view === 'zh' ? 'zh' : undefined}
         />
       )
     }
@@ -410,35 +420,68 @@ export default function App() {
       <PdfViewer
         url={api.pdfUrl(currentDoc.id)}
         scale={scale}
-        onBaseWidth={onBaseWidthPdf}
+        onBaseWidth={onBaseWidth}
       />
     )
   }
 
   const leftShown = leftOpen && !isMobile && !focusMode
+  /** 手机阅读 chrome 的显隐样式：只用 transform / opacity，不改变 main 尺寸 */
+  const chromeStyle = (visible: boolean): React.CSSProperties => ({
+    opacity: visible ? 1 : 0,
+    pointerEvents: visible ? 'auto' : 'none',
+    transition: 'transform 200ms ease, opacity 200ms ease',
+  })
 
   const renderReader = () => (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', minWidth: 0 }}>
       {leftShown && <OutlinePanel page={pageNav.page} pageCount={pageNav.pageCount} />}
 
       <div style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-        <DocHeader
-          view={view}
-          onViewChange={switchView}
-          bilingual={bilingual}
-          readerPrefs={readerPrefs}
-          onReaderPrefsChange={setReaderPrefs}
-          rightOpen={rightOpen}
-          onToggleRight={toggleRight}
-          focusMode={focusMode}
-          onToggleFocus={toggleFocus}
-          isMobile={isMobile}
-          leftOpen={leftShown}
-          onToggleLeft={toggleLeft}
-        />
+        {isMobile ? (
+          // 手机：顶栏以 overlay 叠在页面上方，隐藏时上移淡出，不占布局高度
+          <div style={{
+            position: 'absolute', top: 0, left: 0, right: 0, zIndex: 30,
+            paddingTop: 'env(safe-area-inset-top)', background: 'var(--bg)',
+            transform: chromeVisible ? 'translateY(0)' : 'translateY(-100%)',
+            ...chromeStyle(chromeVisible),
+          }}>
+            <DocHeader
+              view={view}
+              onViewChange={switchView}
+              bilingual={bilingual}
+              readerPrefs={readerPrefs}
+              onReaderPrefsChange={setReaderPrefs}
+              rightOpen={rightOpen}
+              onToggleRight={toggleRight}
+              focusMode={focusMode}
+              onToggleFocus={toggleFocus}
+              isMobile={isMobile}
+              leftOpen={leftShown}
+              onToggleLeft={toggleLeft}
+            />
+          </div>
+        ) : (
+          <DocHeader
+            view={view}
+            onViewChange={switchView}
+            bilingual={bilingual}
+            readerPrefs={readerPrefs}
+            onReaderPrefsChange={setReaderPrefs}
+            rightOpen={rightOpen}
+            onToggleRight={toggleRight}
+            focusMode={focusMode}
+            onToggleFocus={toggleFocus}
+            isMobile={isMobile}
+            leftOpen={leftShown}
+            onToggleLeft={toggleLeft}
+          />
+        )}
         <main
           ref={mainRef}
-          style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto', background: 'var(--bg-canvas)', position: 'relative' }}
+          style={isMobile
+            ? { position: 'absolute', inset: 0, overflow: 'auto', background: 'var(--bg-canvas)' }
+            : { flex: '1 1 0', minHeight: 0, overflow: 'auto', background: 'var(--bg-canvas)', position: 'relative' }}
         >
           {renderReaderBody()}
         </main>
@@ -455,7 +498,22 @@ export default function App() {
             onFitWidth={() => { fitWidth() }}
             focusMode={focusMode}
             onToggleFocus={toggleFocus}
+            mobile={isMobile}
+            chromeVisible={chromeVisible}
+            onOpenOutline={() => setOutlineOpen(true)}
+            settings={isMobile ? <ReaderSettings value={readerPrefs} onChange={setReaderPrefs} /> : undefined}
           />
+        )}
+        {isMobile && currentDoc && (
+          // 手机 AI 入口：右下角悬浮按钮，随阅读 chrome 一起显隐
+          <button
+            className="mobile-fab"
+            title="问 AI"
+            onClick={() => openRight(rightTab)}
+            style={chromeStyle(chromeVisible)}
+          >
+            <Icon d={PATH_SPARKLE} size={22} />
+          </button>
         )}
       </div>
 
@@ -463,27 +521,11 @@ export default function App() {
         <Resizer side="right" min={240} max={520} onResize={(w) => { setWNotes(w); savePanelPrefs({ notes: w }) }} />
       )}
       {!isMobile && <RightPanel width={wNotes} />}
-
-      {/* 手机：右栏抽屉（笔记 / 问答 / 导读 / 信息），由 DocHeader 的按钮开关 */}
-      {isMobile && rightOpen && (
-        <>
-          <div
-            style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 60 }}
-            onClick={() => setRightOpen(false)}
-          />
-          <div style={{
-            position: 'fixed', right: 0, top: 0, bottom: 56, zIndex: 61,
-            width: drawerW, boxShadow: '-2px 0 16px rgba(0,0,0,.35)', display: 'flex',
-          }}>
-            <RightPanel width={drawerW} embedded />
-          </div>
-        </>
-      )}
     </div>
   )
 
   return (
-    <div className={`app-shell${focusMode ? ' focus-mode' : ''}`}>
+    <div className={`app-shell${focusMode ? ' focus-mode' : ''}${mainView === 'reader' ? ' reading-view' : ''}`}>
       <NavRail
         onOpenSettings={() => setShowSettings(true)}
         onOpenArxiv={() => setShowArxiv(true)}
@@ -497,11 +539,32 @@ export default function App() {
         />
 
         {mainView === 'library' && (
-          <LibraryView isMobile={isMobile} onOpenArxiv={() => setShowArxiv(true)} />
+          <LibraryView
+            isMobile={isMobile}
+            onOpenArxiv={() => setShowArxiv(true)}
+            onOpenPalette={() => setPaletteOpen(true)}
+          />
         )}
         {mainView === 'radar' && <RadarView />}
         {mainView === 'reader' && renderReader()}
       </div>
+
+      {/* 手机：AI 抽屉（导读 / 问答 / 标注 / 信息）与目录抽屉，各为独立的底部抽屉 */}
+      {isMobile && mainView === 'reader' && currentDoc && (
+        <>
+          <BottomSheet open={rightOpen} onClose={() => setRightOpen(false)} snap={sheetSnap} onSnapChange={setSheetSnap}>
+            <RightPanel width={0} embedded />
+          </BottomSheet>
+          <BottomSheet open={outlineOpen} onClose={() => setOutlineOpen(false)} snap={outlineSnap} onSnapChange={setOutlineSnap}>
+            <OutlinePanel
+              page={pageNav.page}
+              pageCount={pageNav.pageCount}
+              fluid
+              onNavigate={() => setOutlineOpen(false)}
+            />
+          </BottomSheet>
+        </>
+      )}
 
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
       {showArxiv && <ArxivPanel onClose={() => setShowArxiv(false)} />}

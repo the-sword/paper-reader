@@ -122,8 +122,8 @@ export default function RightPanel({ width, embedded = false }: Props) {
   if (embedded) {
     return (
       <aside className="right-panel" style={{
-        width, flexShrink: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-side)',
-        overflow: 'hidden', minHeight: 0,
+        width: '100%', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-side)',
+        overflow: 'hidden',
       }}>
         <MobileTabs />
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
