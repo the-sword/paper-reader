@@ -91,17 +91,35 @@ function parseBlocks(md: string): Block[] {
   return blocks
 }
 
-/** 处理行内标记：**粗体**、`code`，其余交给 RichText（含公式） */
-function Inline({ text }: { text: string }) {
+/** 页码引用 chip：[p.N] 渲染为可点击的「p.N ↗」，点击跳转到对应页 */
+function CiteChip({ page, onCiteClick }: { page: number; onCiteClick?: (page: number) => void }) {
+  return (
+    <button
+      type="button"
+      title={`跳转到第 ${page} 页`}
+      onClick={() => onCiteClick?.(page)}
+      style={{
+        display: 'inline-block', margin: '0 2px', padding: '0 5px', borderRadius: 4,
+        border: 'none', fontSize: '0.9em', fontWeight: 600, lineHeight: 1.6,
+        background: 'color-mix(in srgb, var(--accent) 12%, transparent)',
+        color: 'var(--accent)', cursor: onCiteClick ? 'pointer' : 'default',
+      }}
+    >p.{page} ↗</button>
+  )
+}
+
+/** 处理行内标记：**粗体**、`code`、[p.N] 页码引用，其余交给 RichText（含公式） */
+function Inline({ text, onCiteClick }: { text: string; onCiteClick?: (page: number) => void }) {
   const parts = useMemo(() => {
-    const out: Array<{ t: 'text' | 'bold' | 'code'; v: string }> = []
-    const re = /\*\*([^*]+)\*\*|`([^`]+)`/g
+    const out: Array<{ t: 'text' | 'bold' | 'code' | 'cite'; v: string }> = []
+    const re = /\*\*([^*]+)\*\*|`([^`]+)`|\[p\.(\d+)\]/g
     let last = 0
     let m: RegExpExecArray | null
     while ((m = re.exec(text)) !== null) {
       if (m.index > last) out.push({ t: 'text', v: text.slice(last, m.index) })
       if (m[1] !== undefined) out.push({ t: 'bold', v: m[1] })
       else if (m[2] !== undefined) out.push({ t: 'code', v: m[2] })
+      else if (m[3] !== undefined) out.push({ t: 'cite', v: m[3] })
       last = m.index + m[0].length
     }
     if (last < text.length) out.push({ t: 'text', v: text.slice(last) })
@@ -112,6 +130,7 @@ function Inline({ text }: { text: string }) {
     <>
       {parts.map((p, i) => {
         if (p.t === 'bold') return <strong key={i}>{p.v}</strong>
+        if (p.t === 'cite') return <CiteChip key={i} page={Number(p.v)} onCiteClick={onCiteClick} />
         if (p.t === 'code') {
           return (
             <code key={i} style={{
@@ -126,7 +145,13 @@ function Inline({ text }: { text: string }) {
   )
 }
 
-export default function MarkdownView({ text }: { text: string }) {
+interface Props {
+  text: string
+  /** 点击 [p.N] 页码引用时回调（如跳转到原文该页） */
+  onCiteClick?: (page: number) => void
+}
+
+export default function MarkdownView({ text, onCiteClick }: Props) {
   const blocks = useMemo(() => parseBlocks(text), [text])
 
   return (
@@ -139,7 +164,7 @@ export default function MarkdownView({ text }: { text: string }) {
               fontSize: size, fontWeight: 600, color: 'var(--fg-strong)',
               margin: i === 0 ? '0 0 8px' : '16px 0 6px',
             }}>
-              <Inline text={b.text ?? ''} />
+              <Inline text={b.text ?? ''} onCiteClick={onCiteClick} />
             </div>
           )
         }
@@ -153,7 +178,7 @@ export default function MarkdownView({ text }: { text: string }) {
               }}
             >
               {(b.items ?? []).map((it, j) => (
-                <li key={j} style={{ marginBottom: 4 }}><Inline text={it} /></li>
+                <li key={j} style={{ marginBottom: 4 }}><Inline text={it} onCiteClick={onCiteClick} /></li>
               ))}
             </ul>
           )
@@ -168,7 +193,7 @@ export default function MarkdownView({ text }: { text: string }) {
         }
         return (
           <p key={i} style={{ margin: '6px 0', textAlign: 'justify' }}>
-            <Inline text={b.text ?? ''} />
+            <Inline text={b.text ?? ''} onCiteClick={onCiteClick} />
           </p>
         )
       })}

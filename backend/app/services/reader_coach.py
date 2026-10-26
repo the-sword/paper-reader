@@ -63,9 +63,10 @@ def _system_prompt(goal: str, corpus: str) -> str:
             "2. 回答简洁直接，适合侧边栏随读随问；复杂概念可先一句话再给展开。\n"
             "3. 读者追问时顺着上文继续，不要重复整段背景；指不到具体段落时可建议"
             "读者去看哪一节/哪张图。\n"
-            "4. 被要求评估证据/对比实验时，仍遵守证据分级规则：\n"
+            "4. 依据论文内容作答时，在相应句末用 [p.N] 标注出处页码：N 取语料中该内容之前最近的「〔第N页〕」标记；多处出处连写如 [p.3][p.5]；确定不了页码就不标，绝不编造页码。\n"
+            "5. 被要求评估证据/对比实验时，仍遵守证据分级规则：\n"
             + sum_svc._SOCRATIC_RULES
-            + "\n\n论文内容（图表以「[图] 图注」「[表格]」标记呈现，信息不足处写「论文未提供」）：\n"
+            + "\n\n论文内容（图表以「[图] 图注」「[表格]」标记呈现，信息不足处写「论文未提供」）。正文中的「〔第N页〕」为页码标记：\n"
             + corpus
         )
     g = GOALS[goal]
@@ -81,9 +82,10 @@ def _system_prompt(goal: str, corpus: str) -> str:
         "→ 方法与关键图表三问（这张图想证明什么？证据强不强？有无替代解释？）"
         "→ 论证链评估（「因为A所以B」逐步标证据强度、指出最薄弱一环）"
         "→ 批判点与替代解释 → 三分钟费曼复述（请读者填空复述，你来纠偏）。\n"
-        f"4. 读者目标：{g['label']}。对应路线侧重：{g['route']}。\n\n"
+        f"4. 读者目标：{g['label']}。对应路线侧重：{g['route']}。\n"
+        "5. 依据论文内容作答时，在相应句末用 [p.N] 标注出处页码：N 取语料中该内容之前最近的「〔第N页〕」标记；多处出处连写如 [p.3][p.5]；确定不了页码就不标，绝不编造页码。\n\n"
         + sum_svc._SOCRATIC_RULES
-        + "\n\n论文内容（图表以「[图] 图注」「[表格]」标记呈现，信息不足处写「论文未提供」）：\n"
+        + "\n\n论文内容（图表以「[图] 图注」「[表格]」标记呈现，信息不足处写「论文未提供」）。正文中的「〔第N页〕」为页码标记：\n"
         + corpus
     )
 
@@ -145,7 +147,7 @@ def create_session(
 
 
 def _turn(session_id: str, doc_id: str, goal: str, user_text: str) -> str:
-    corpus, _chars = sum_svc._build_corpus(doc_id)
+    corpus, _chars = sum_svc._build_corpus(doc_id, with_pages=True)
     _append_message(session_id, "user", user_text)
     history = _history(session_id)
     messages = [{"role": "system", "content": _system_prompt(goal, corpus)}]

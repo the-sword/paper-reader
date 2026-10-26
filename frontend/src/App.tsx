@@ -5,6 +5,7 @@ import ArxivPanel from './components/ArxivPanel'
 import RadarView from './components/RadarView'
 import { DEFAULT_READER_PREFS, type ReaderPrefs } from './components/ReaderSettings'
 import RightPanel from './components/RightPanel'
+import OutlinePanel from './components/OutlinePanel'
 import Resizer from './components/Resizer'
 import NavRail from './components/NavRail'
 import TabBar from './components/TabBar'
@@ -30,6 +31,8 @@ const MOBILE_SCALE_MIN = 0.15
 /** 手机端抽屉宽度：视口的 85%，限定在 [260, 340] */
 const DRAWER_MIN_W = 260
 const DRAWER_MAX_W = 340
+/** 跳页定位后目标页闪烁描边的时长（毫秒） */
+const FLASH_MS = 600
 
 /** 阅读主题的切换顺序（值与 ReaderSettings 中的 theme 一致） */
 const THEME_CYCLE: Array<{ value: ReaderPrefs['theme']; label: string }> = [
@@ -63,11 +66,14 @@ export default function App() {
   const refreshLibrary = useStore((s) => s.refreshLibrary)
   const mainView = useStore((s) => s.mainView)
   const setMainView = useStore((s) => s.setMainView)
+  const rightOpen = useStore((s) => s.rightOpen)
+  const setRightOpen = useStore((s) => s.setRightOpen)
+  const leftOpen = useStore((s) => s.leftOpen)
+  const jumpRequest = useStore((s) => s.jumpRequest)
 
   const [scale, setScale] = useState(1.0)
   const [panelPrefsLoaded, setPanelPrefsLoaded] = useState(false)
   const [wNotes, setWNotes] = useState(W_NOTES)
-  const [showNotes, setShowNotes] = useState(true)
   const [showSettings, setShowSettings] = useState(false)
   const [showArxiv, setShowArxiv] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -80,7 +86,6 @@ export default function App() {
   /** 窄屏（手机）下笔记面板改为抽屉浮层 */
   const [isMobile, setIsMobile] = useState(false)
   const [vw, setVw] = useState(0)
-  const [showNotesDrawer, setShowNotesDrawer] = useState(false)
   const [view, setView] = useState<ViewMode>('pdf')
 
   const mainRef = useRef<HTMLElement>(null)
@@ -146,12 +151,26 @@ export default function App() {
   const pageNavRef = useRef(pageNav)
   pageNavRef.current = pageNav
 
+  // 目录 / 标注 / 页码引用的跳页请求：滚动到该页并闪烁描边 600ms
+  useEffect(() => {
+    if (!jumpRequest) return
+    pageNavRef.current.goTo(jumpRequest.page)
+    const el = mainRef.current?.querySelector<HTMLElement>(`.pdf-page[data-page="${jumpRequest.page}"]`)
+    if (!el) return
+    el.classList.remove('pdf-flash')
+    void el.offsetWidth
+    el.classList.add('pdf-flash')
+    const t = window.setTimeout(() => el.classList.remove('pdf-flash'), FLASH_MS)
+    return () => window.clearTimeout(t)
+  }, [jumpRequest])
+
   useEffect(() => {
     const onResize = (): void => {
       const w = window.innerWidth
       setIsMobile(w < MOBILE)
       setVw(w)
-      setShowNotes(w >= VERY_NARROW)
+      // 手机端抽屉默认收起；桌面端由偏好决定（见下方偏好加载）
+      if (w < MOBILE) setRightOpen(false)
     }
     onResize()
     window.addEventListener('resize', onResize)
@@ -169,7 +188,10 @@ export default function App() {
         setReaderPrefs((p) => ({ ...p, theme: values.reader_theme as ReaderPrefs['theme'] }))
       }
       if (typeof values.panel_notes === 'number') setWNotes(values.panel_notes)
-      if (typeof values.panel_notes_visible === 'boolean') setShowNotes(values.panel_notes_visible)
+      // 右栏显隐：有偏好用偏好，否则宽屏默认展开
+      setRightOpen(typeof values.panel_notes_visible === 'boolean'
+        ? values.panel_notes_visible
+        : window.innerWidth >= VERY_NARROW)
       setPanelPrefsLoaded(true)
       setViewPrefLoaded(true)
     }).catch(() => setViewPrefLoaded(true))
@@ -225,17 +247,20 @@ export default function App() {
   const panelSaveTimer = useRef<number | null>(null)
 
   /** 保存笔记面板布局到偏好（防抖，避免拖动时频繁请求） */
-  const savePanelPrefs = (patch: { notes?: number; showNotes?: boolean }): void => {
-    if (!panelPrefsLoaded) return
+  const savePanelPrefs = (patch: { notes?: number }): void => {
+    if (!panelPrefsLoaded || patch.notes === undefined) return
     if (panelSaveTimer.current !== null) window.clearTimeout(panelSaveTimer.current)
     panelSaveTimer.current = window.setTimeout(() => {
       panelSaveTimer.current = null
-      void api.savePrefs({
-        ...(patch.notes !== undefined ? { panel_notes: patch.notes } : {}),
-        ...(patch.showNotes !== undefined ? { panel_notes_visible: patch.showNotes } : {}),
-      }).catch(() => {})
+      void api.savePrefs({ panel_notes: patch.notes }).catch(() => {})
     }, 400)
   }
+
+  // 桌面端右栏显隐写回偏好（手机抽屉的开关不持久化）
+  useEffect(() => {
+    if (!panelPrefsLoaded || isMobile) return
+    void api.savePrefs({ panel_notes_visible: rightOpen }).catch(() => {})
+  }, [rightOpen, panelPrefsLoaded, isMobile])
 
   /** 切换视图并记住选择 */
   const switchView = (v: ViewMode): void => {
@@ -272,8 +297,13 @@ export default function App() {
   const toggleFocus = (): void => setFocusMode((v) => !v)
 
   const toggleRight = (): void => {
-    if (isMobile) { setShowNotesDrawer((v) => !v); return }
-    setShowNotes((v) => { savePanelPrefs({ showNotes: !v }); return !v })
+    const st = useStore.getState()
+    st.setRightOpen(!st.rightOpen)
+  }
+
+  const toggleLeft = (): void => {
+    const st = useStore.getState()
+    st.setLeftOpen(!st.leftOpen)
   }
 
   const zoomIn = (): void => { exitFitMode(); setScale((s) => clampScale(s + SCALE_STEP)) }
@@ -302,6 +332,7 @@ export default function App() {
       else if (e.key === '0') { fitWidth(); e.preventDefault() }
       else if (e.key === '1') { zoomReset(); e.preventDefault() }
       else if (e.key === ']') { toggleRight(); e.preventDefault() }
+      else if (e.key === '[') { toggleLeft(); e.preventDefault() }
       else if (e.key === 'f') { toggleFocus(); e.preventDefault() }
       else if (e.key === 'j') { nav.goTo(nav.page + 1); e.preventDefault() }
       else if (e.key === 'k') { nav.goTo(nav.page - 1); e.preventDefault() }
@@ -310,7 +341,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
     // zoomIn 等为每次渲染新建的闭包，依赖 fitWidth/readerActive/focusMode 即可覆盖其读取的状态
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fitWidth, readerActive, focusMode, isMobile, showNotes])
+  }, [fitWidth, readerActive, focusMode, isMobile, leftOpen])
 
   useEffect(() => {
     void refreshSidebar()
@@ -345,7 +376,7 @@ export default function App() {
     return [...base, ...doc]
     // 命令闭包读取的是最新渲染的状态，随渲染重建即可
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentDoc, focusMode, readerPrefs.theme, bilingual.ready, view, isMobile, showNotes])
+  }, [currentDoc, focusMode, readerPrefs.theme, bilingual.ready, view, isMobile, rightOpen, leftOpen])
 
   const drawerW = Math.min(DRAWER_MAX_W, Math.max(DRAWER_MIN_W, Math.round(vw * 0.85)))
 
@@ -384,8 +415,12 @@ export default function App() {
     )
   }
 
+  const leftShown = leftOpen && !isMobile && !focusMode
+
   const renderReader = () => (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', minWidth: 0 }}>
+      {leftShown && <OutlinePanel page={pageNav.page} pageCount={pageNav.pageCount} />}
+
       <div style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
         <DocHeader
           view={view}
@@ -393,11 +428,13 @@ export default function App() {
           bilingual={bilingual}
           readerPrefs={readerPrefs}
           onReaderPrefsChange={setReaderPrefs}
-          rightOpen={isMobile ? showNotesDrawer : showNotes}
+          rightOpen={rightOpen}
           onToggleRight={toggleRight}
           focusMode={focusMode}
           onToggleFocus={toggleFocus}
           isMobile={isMobile}
+          leftOpen={leftShown}
+          onToggleLeft={toggleLeft}
         />
         <main
           ref={mainRef}
@@ -422,25 +459,23 @@ export default function App() {
         )}
       </div>
 
-      {showNotes && !isMobile && (
-        <>
-          <Resizer side="right" min={240} max={520} onResize={(w) => { setWNotes(w); savePanelPrefs({ notes: w }) }} />
-          <RightPanel width={wNotes} />
-        </>
+      {!isMobile && rightOpen && (
+        <Resizer side="right" min={240} max={520} onResize={(w) => { setWNotes(w); savePanelPrefs({ notes: w }) }} />
       )}
+      {!isMobile && <RightPanel width={wNotes} />}
 
-      {/* 手机：笔记面板右侧抽屉，点 DocHeader 的右栏按钮开关 */}
-      {isMobile && showNotesDrawer && (
+      {/* 手机：右栏抽屉（笔记 / 问答 / 导读 / 信息），由 DocHeader 的按钮开关 */}
+      {isMobile && rightOpen && (
         <>
           <div
             style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 60 }}
-            onClick={() => setShowNotesDrawer(false)}
+            onClick={() => setRightOpen(false)}
           />
           <div style={{
             position: 'fixed', right: 0, top: 0, bottom: 56, zIndex: 61,
             width: drawerW, boxShadow: '-2px 0 16px rgba(0,0,0,.35)', display: 'flex',
           }}>
-            <RightPanel width={drawerW} />
+            <RightPanel width={drawerW} embedded />
           </div>
         </>
       )}

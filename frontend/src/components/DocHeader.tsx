@@ -4,7 +4,7 @@ import type { BilingualJob } from '../hooks/useBilingualJob'
 import type { ReaderPrefs } from './ReaderSettings'
 import ReaderSettings from './ReaderSettings'
 import {
-  Icon, PATH_CHEVRON_LEFT, PATH_DOWNLOAD, PATH_FOCUS, PATH_PANEL_RIGHT,
+  Icon, PATH_CHEVRON_LEFT, PATH_DOWNLOAD, PATH_FOCUS, PATH_PANEL_RIGHT, PATH_PANEL_LEFT,
 } from './icons'
 
 export type ViewMode = 'pdf' | 'bilingual'
@@ -20,6 +20,8 @@ interface Props {
   focusMode: boolean
   onToggleFocus: () => void
   isMobile: boolean
+  leftOpen: boolean
+  onToggleLeft: () => void
 }
 
 /** 格式化添加日期为 MM-DD */
@@ -71,6 +73,15 @@ export default function DocHeader(props: Props) {
         ><Icon d={PATH_CHEVRON_LEFT} size={16} /></button>
       )}
 
+      {!isMobile && (
+        <button
+          className="btn-ghost"
+          title={props.leftOpen ? '收起左栏 ([)' : '展开左栏 ([)'}
+          onClick={props.onToggleLeft}
+          style={{ padding: '4px 6px', border: 'none', display: 'flex', color: props.leftOpen ? 'var(--accent)' : 'var(--fg-muted)' }}
+        ><Icon d={PATH_PANEL_LEFT} size={16} /></button>
+      )}
+
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{
           fontSize: 13, fontWeight: 600, color: 'var(--fg-strong)',
@@ -114,12 +125,14 @@ export default function DocHeader(props: Props) {
         <ReaderSettings value={props.readerPrefs} onChange={props.onReaderPrefsChange} />
       )}
 
-      <button
-        className="btn-ghost"
-        title={props.rightOpen ? '收起右栏 (])' : '展开右栏 (])'}
-        onClick={props.onToggleRight}
-        style={{ padding: '4px 6px', border: 'none', display: 'flex', color: props.rightOpen ? 'var(--accent)' : 'var(--fg-muted)' }}
-      ><Icon d={PATH_PANEL_RIGHT} size={16} /></button>
+      {isMobile && (
+        <button
+          className="btn-ghost"
+          title="笔记与问答"
+          onClick={props.onToggleRight}
+          style={{ padding: '4px 6px', border: 'none', display: 'flex', color: props.rightOpen ? 'var(--accent)' : 'var(--fg-muted)' }}
+        ><Icon d={PATH_PANEL_RIGHT} size={16} /></button>
+      )}
 
       {!isMobile && (
         <button

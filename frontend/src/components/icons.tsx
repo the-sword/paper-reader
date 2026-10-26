@@ -46,6 +46,21 @@ export const PATH_UPLOAD = [
   'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'M12 18v-6', 'M9 15l3-3 3 3',
 ]
 
+/** 问答 / 批注标记：对话气泡 */
+export const PATH_CHAT = 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'
+/** 笔记：钢笔 */
+export const PATH_PEN = ['M12 20h9', 'M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z']
+/** 信息：圆圈内的 i */
+export const PATH_INFO = ['M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0-18 0', 'M12 16v-4', 'M12 8h.01']
+/** 左栏开关：左侧竖线分隔的矩形 */
+export const PATH_PANEL_LEFT = ['M3 3h18v18H3z', 'M9 3v18']
+/** 发送箭头 */
+export const PATH_SEND = ['M22 2L11 13', 'M22 2l-7 20-4-9-9-4 20-7z']
+/** 复制：两张叠放的纸 */
+export const PATH_COPY = ['M9 9h11v11H9z', 'M5 15H4V4h11v1']
+/** 对勾 */
+export const PATH_CHECK = 'M20 6L9 17l-5-5'
+
 interface IconProps {
   d: string | string[]
   size?: number

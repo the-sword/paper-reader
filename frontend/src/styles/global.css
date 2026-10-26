@@ -144,16 +144,138 @@ input:focus, textarea:focus { border-color: var(--accent); }
 }
 
 /* ---------- 选区气泡 ---------- */
-.sel-bubble {
+.sel-float {
   position: fixed;
   transform: translate(-50%, -100%);
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
-  padding: 8px 10px;
   z-index: 900;
-  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.sel-float.below { transform: translate(-50%, 0); }
+
+/* 划词菜单：深色胶囊 + 指向选区的小三角 */
+.sel-bubble {
+  position: relative;
+  width: 340px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: #1d2433;
+  border-radius: 9px;
+  box-shadow: var(--shadow-pop);
+  white-space: nowrap;
+}
+.sel-bubble::after {
+  content: '';
+  position: absolute;
+  left: var(--arrow-x, 50%);
+  bottom: -6px;
+  transform: translateX(-50%);
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 6px solid #1d2433;
+}
+.sel-float.below .sel-bubble::after {
+  bottom: auto;
+  top: -6px;
+  border-top: none;
+  border-bottom: 6px solid #1d2433;
+}
+.sel-dot {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+  border: 2px solid #1d2433;
+  border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.sel-dot:hover { transform: scale(1.12); }
+.sel-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: #475467;
+  flex-shrink: 0;
+}
+.sel-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #e4e7ec;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sel-btn:hover:not(:disabled) { background: #2d3748; }
+.sel-btn:disabled { opacity: 0.45; cursor: default; }
+.sel-btn.sel-accent { background: var(--accent); color: #fff; font-weight: 600; }
+.sel-btn.sel-accent:hover { background: var(--accent); opacity: 0.9; }
+
+/* 翻译结果卡：胶囊下方的浅色卡片，不关闭菜单 */
+.sel-trans-card {
+  width: 340px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+}
+.sel-trans-hint { font-size: 12px; color: var(--fg-muted); }
+.sel-trans-text { font-size: 13px; line-height: 1.6; color: var(--fg-strong); }
+.sel-trans-meta { font-size: 10px; color: var(--fg-muted); margin-top: 4px; }
+.sel-trans-err { font-size: 11px; color: #b42318; }
+
+/* 页边批注标记：标注颜色的浅底 + 同色描边，点击打开右栏笔记 */
+.ann-note-marker {
+  position: absolute;
+  left: 100%;
+  margin-left: 6px;
+  min-width: 26px;
+  height: 18px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 2;
+  transform: translateY(-2px);
+}
+.ann-note-marker.inside {
+  left: auto;
+  right: 4px;
+  margin-left: 0;
+}
+
+/* 目录/标注跳页后的闪烁描边 */
+.pdf-page.pdf-flash::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--accent);
+  border-radius: 2px;
+  pointer-events: none;
+  animation: pdf-flash-fade 600ms ease-out forwards;
+}
+@keyframes pdf-flash-fade {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
 }
 
 .sel-quote {

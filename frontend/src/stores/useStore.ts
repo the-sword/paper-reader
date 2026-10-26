@@ -3,6 +3,7 @@ import {
   api,
   type Annotation, type DocumentMeta, type Folder, type Segment, type Tag,
 } from '../api/client'
+import { DEFAULT_ANNOTATION_COLOR } from '../lib/annotationColors'
 
 /** 书库智能视图：客户端在已获取的文献列表上过滤 */
 export type SmartView = 'all' | 'recent' | 'unread' | 'parsed' | 'bilingual' | 'annotated'
@@ -10,6 +11,36 @@ export type SmartView = 'all' | 'recent' | 'unread' | 'parsed' | 'bilingual' | '
 export type LibrarySort = 'added' | 'opened' | 'title'
 /** 主视图：书库 / 阅读 / 情报雷达 */
 export type MainView = 'library' | 'reader' | 'radar'
+/** 右侧面板页签：导读 / 问答 / 标注 / 信息 */
+export type RightTab = 'guide' | 'chat' | 'notes' | 'info'
+/** 目录/标注/引用请求跳页：nonce 保证同一页重复请求也能触发 */
+export interface JumpRequest {
+  page: number
+  nonce: number
+}
+/** 问答引用块：划词原文与所在页 */
+export interface ChatQuote {
+  text: string
+  page: number
+}
+/** 自动发送的问题（「解释」用），由 ChatPanel 消费后清空 */
+export interface ChatAutoSend {
+  text: string
+  nonce: number
+}
+/** 「解释」动作自动发送的提示语 */
+export const EXPLAIN_PROMPT = '请结合上下文解释这段话（先一句话概括，再展开）：'
+const LS_LEFT_OPEN = 'pr.leftOpen'
+/** 左栏目录的默认显隐：宽屏默认展开，窄屏默认收起 */
+const LEFT_WIDE_PX = 1280
+
+/** 读取左栏显隐偏好；无记录时按视口宽度决定 */
+function readLeftOpen(): boolean {
+  const raw = window.localStorage.getItem(LS_LEFT_OPEN)
+  if (raw === 'true' || raw === 'false') return raw === 'true'
+  return window.innerWidth >= LEFT_WIDE_PX
+}
+
 /** 文档标签页（只存 id 与标题，文档内容按需加载） */
 export interface OpenTab {
   id: string
@@ -112,6 +143,18 @@ interface State {
   pagePos: Record<string, number>
   smartView: SmartView
   librarySort: LibrarySort
+  /** 右侧面板是否展开（收起时只剩竖向导航轨） */
+  rightOpen: boolean
+  rightTab: RightTab
+  /** 左侧目录栏是否展开（localStorage 'pr.leftOpen' 持久化） */
+  leftOpen: boolean
+  jumpRequest: JumpRequest | null
+  chatQuote: ChatQuote | null
+  chatAutoSend: ChatAutoSend | null
+  /** 需要在笔记面板中定位并进入编辑态的标注 id */
+  focusAnnotationId: string | null
+  /** 最近使用的划线色，划词菜单「h」键直接用它保存 */
+  lastColor: string
 
   // 阅读
   segments: Segment[]
@@ -139,7 +182,15 @@ interface State {
   refreshAnnotations: (docId: string) => Promise<void>
   addAnnotation: (docId: string, page: number, rects: number[][], quote: string, color: string,
                   opts?: { segmentId?: string; side?: string; kind?: string
-                           startOffset?: number; endOffset?: number }) => Promise<void>
+                           startOffset?: number; endOffset?: number }) => Promise<Annotation | null>
+  setRightOpen: (v: boolean) => void
+  openRight: (tab: RightTab) => void
+  setLeftOpen: (v: boolean) => void
+  requestJump: (page: number) => void
+  setChatQuote: (q: ChatQuote | null) => void
+  askAI: (quote: string, page: number, mode: 'ask' | 'explain') => void
+  setFocusAnnotation: (id: string | null) => void
+  setLastColor: (color: string) => void
   removeAnnotation: (id: string) => Promise<void>
   clearError: () => void
   moveDocumentToFolder: (docId: string, folderId: string | null, additive?: boolean) => Promise<void>
@@ -178,6 +229,14 @@ export const useStore = create<State>((set, get) => ({
   pagePos: readLocal<Record<string, number>>(LS_PAGE_POS, {}, isPagePos),
   smartView: 'all',
   librarySort: 'added',
+  rightOpen: true,
+  rightTab: 'guide',
+  leftOpen: readLeftOpen(),
+  jumpRequest: null,
+  chatQuote: null,
+  chatAutoSend: null,
+  focusAnnotationId: null,
+  lastColor: DEFAULT_ANNOTATION_COLOR,
 
   segments: [],
   translations: {},
@@ -264,6 +323,23 @@ export const useStore = create<State>((set, get) => ({
 
   setMainView: (v) => set({ mainView: v }),
 
+  setRightOpen: (v) => set({ rightOpen: v }),
+  openRight: (tab) => set({ rightOpen: true, rightTab: tab }),
+  setLeftOpen: (v) => {
+    window.localStorage.setItem(LS_LEFT_OPEN, String(v))
+    set({ leftOpen: v })
+  },
+  requestJump: (page) => set({ jumpRequest: { page, nonce: (get().jumpRequest?.nonce ?? 0) + 1 } }),
+  setChatQuote: (q) => set({ chatQuote: q }),
+  askAI: (quote, page, mode) => {
+    set({ rightOpen: true, rightTab: 'chat', chatQuote: { text: quote, page } })
+    if (mode === 'explain') {
+      set({ chatAutoSend: { text: EXPLAIN_PROMPT, nonce: (get().chatAutoSend?.nonce ?? 0) + 1 } })
+    }
+  },
+  setFocusAnnotation: (id) => set({ focusAnnotationId: id }),
+  setLastColor: (color) => set({ lastColor: color }),
+
   setFolder: (id) => {
     set({ activeFolder: id, activeTag: null, smartView: 'all', mainView: 'library' })
     void get().refreshLibrary()
@@ -304,7 +380,7 @@ export const useStore = create<State>((set, get) => ({
     }
     set((s) => ({ annotations: [...s.annotations, tmp] }))
     try {
-      await api.createAnnotation({
+      const saved = await api.createAnnotation({
         document_id: docId, page, kind: opts?.kind ?? 'highlight',
         rects, color, quote, comment: '',
         segment_id: opts?.segmentId ?? null,
@@ -313,11 +389,13 @@ export const useStore = create<State>((set, get) => ({
         end_offset: opts?.endOffset ?? null,
       })
       await get().refreshAnnotations(docId)
+      return saved
     } catch (e) {
       set((s) => ({
         annotations: s.annotations.filter((a) => a.id !== tmp.id),
         error: String(e),
       }))
+      return null
     }
   },
 

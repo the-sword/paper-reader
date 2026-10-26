@@ -1,48 +1,125 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../stores/useStore'
-import { api } from '../api/client'
+import { api, type Annotation } from '../api/client'
+import { annotationLabel } from '../lib/annotationColors'
 
 /**
- * 包裹容器。
- *
- * 必须是普通函数而非组件：若在组件内部定义 `const Shell = ...`，
- * 每次渲染都会产生新的组件类型，React 会卸载重建子树，
- * 导致输入框每输一个字符就失焦。
+ * 标注列表（右栏「标注」页签）。
+ * 段落流标注按段落序号分组，PDF 坐标标注按页码分组。
+ * 从划词菜单「笔记」进入时，通过 focusAnnotationId 定位到对应条目并直接进入评论编辑态。
  */
-function shellWrap(
-  children: React.ReactNode, embedded: boolean, width: number,
-): React.ReactElement {
-  return embedded ? (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-      {children}
-    </div>
-  ) : (
-    <aside style={{ ...panelStyle, width }}>{children}</aside>
-  )
-}
-
-export default function NotePanel({ width = 300, embedded = false }: { width?: number; embedded?: boolean }) {
+export default function NotePanel() {
   const currentDoc = useStore((s) => s.currentDoc)
   const annotations = useStore((s) => s.annotations)
   const removeAnnotation = useStore((s) => s.removeAnnotation)
   const refreshAnnotations = useStore((s) => s.refreshAnnotations)
-  const refreshSidebar = useStore((s) => s.refreshSidebar)
+  const focusAnnotationId = useStore((s) => s.focusAnnotationId)
+  const setFocusAnnotation = useStore((s) => s.setFocusAnnotation)
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
-  const [tagInput, setTagInput] = useState('')
+  const listRef = useRef<HTMLDivElement>(null)
 
-  /** 根据 embedded 决定外层容器 */
+  // 定位并编辑指定标注：等列表渲染后滚动到该条，再进入评论编辑
+  useEffect(() => {
+    if (!focusAnnotationId) return
+    const target = annotations.find((a) => a.id === focusAnnotationId)
+    if (!target) return
+    setEditing(target.id)
+    setDraft(target.comment ?? '')
+    setFocusAnnotation(null)
+    requestAnimationFrame(() => {
+      listRef.current
+        ?.querySelector(`[data-ann-id="${target.id}"]`)
+        ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+  }, [focusAnnotationId, annotations, setFocusAnnotation])
+
   if (!currentDoc) {
-    return (
-      shellWrap(
-        <div className="hint" style={{ padding: 16 }}>选择一篇文献开始阅读</div>,
-        embedded, width,
-      )
-    )
+    return <div className="hint" style={{ padding: 16 }}>选择一篇文献开始阅读</div>
   }
 
-  // 段落流标注按段落序号分组，PDF 坐标标注按页码分组
-  type Group = { key: string; label: string; order: number; items: typeof annotations }
+  const groups = groupAnnotations(annotations)
+
+  const saveComment = async (id: string) => {
+    await api.updateAnnotation(id, { comment: draft })
+    setEditing(null)
+    await refreshAnnotations(currentDoc.id)
+  }
+
+  return (
+    <div ref={listRef} style={{ flex: 1, overflowY: 'auto', padding: 10 }}>
+      {!annotations.length && (
+        <div className="hint" style={{ padding: 12 }}>
+          选中原文后用划词菜单的色点或「笔记」添加标注。
+        </div>
+      )}
+      {groups.map((g) => (
+        <div key={g.key} style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 5 }}>
+            {g.label}
+          </div>
+          {g.items.map((a) => (
+            <div key={a.id} data-ann-id={a.id} style={{
+              padding: '6px 8px', marginBottom: 6, borderRadius: 6,
+              borderLeft: `3px solid ${a.color}`, background: 'var(--bg-card)',
+            }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 3 }}>
+                {a.segment_id && (
+                  <span style={{
+                    fontSize: 9, padding: '0 4px', borderRadius: 3,
+                    background: a.side === 'zh' ? 'var(--zh-bg)' : 'var(--bg-active)',
+                    color: a.side === 'zh' ? 'var(--zh-fg)' : 'var(--fg-muted)',
+                  }}>{a.side === 'zh' ? '译文' : '原文'}</span>
+                )}
+                {annotationLabel(a.color) && (
+                  <span style={{ fontSize: 10, color: a.color }}>{annotationLabel(a.color)}</span>
+                )}
+                <span style={{ fontSize: 10, color: 'var(--fg-muted)', marginLeft: 'auto' }}>p.{a.page}</span>
+              </div>
+              {a.quote && (
+                <div style={{ fontSize: 12, marginBottom: 4, lineHeight: 1.5, color: 'var(--fg-strong)' }}>
+                  {a.quote}
+                </div>
+              )}
+              {editing === a.id ? (
+                <div>
+                  <textarea
+                    autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
+                    rows={3} style={{ width: '100%', fontSize: 12, marginBottom: 4 }}
+                  />
+                  <button className="btn-primary" style={{ fontSize: 11 }} onClick={() => void saveComment(a.id)}>保存</button>
+                  <button className="btn-ghost" style={{ fontSize: 11 }} onClick={() => setEditing(null)}>取消</button>
+                </div>
+              ) : (
+                <div
+                  onClick={() => { setEditing(a.id); setDraft(a.comment ?? '') }}
+                  style={{ fontSize: 12, color: a.comment ? 'var(--fg)' : 'var(--fg-muted)', cursor: 'text', minHeight: 18 }}
+                >
+                  {a.comment || '点击写笔记…'}
+                </div>
+              )}
+              <button
+                className="btn-ghost"
+                style={{ fontSize: 10, padding: '1px 4px', marginTop: 2 }}
+                onClick={() => void removeAnnotation(a.id)}
+              >删除</button>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+interface Group {
+  key: string
+  label: string
+  order: number
+  items: Annotation[]
+}
+
+/** 把标注按段落或页码分组，并按文档顺序排序 */
+function groupAnnotations(annotations: Annotation[]): Group[] {
   const groups: Group[] = []
   const segGroups = new Map<string, Group>()
   const pageGroups = new Map<number, Group>()
@@ -74,123 +151,5 @@ export default function NotePanel({ width = 300, embedded = false }: { width?: n
       g.items.push(a)
     }
   }
-  groups.sort((x, y) => x.order - y.order)
-
-  const saveComment = async (id: string) => {
-    await api.updateAnnotation(id, { comment: draft })
-    setEditing(null)
-    await refreshAnnotations(currentDoc.id)
-  }
-
-  const addTag = async () => {
-    const name = tagInput.trim()
-    if (!name) return
-    const tag = await api.createTag(name, '#3b82f6')
-    await api.tagDocument(currentDoc.id, tag.id)
-    setTagInput('')
-    await refreshSidebar()
-    // 只刷新元数据，不重载段落，避免打断输入与页面闪烁
-    await useStore.getState().refreshCurrentDocMeta()
-  }
-
-  return shellWrap(
-    <>
-      <div style={{ padding: 12, borderBottom: '1px solid var(--border)' }}>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, lineHeight: 1.4 }}>
-          {currentDoc.title}
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 8 }}>
-          {currentDoc.page_count ?? '?'} 页 · {annotations.length} 条标注
-        </div>
-
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 8 }}>
-          {currentDoc.tags.map((t) => (
-            <span key={t.id} style={{
-              fontSize: 11, padding: '2px 7px', borderRadius: 10,
-              background: `${t.color}26`, color: t.color, border: `1px solid ${t.color}`,
-            }}>{t.name}</span>
-          ))}
-          <input
-            value={tagInput}
-            onChange={(e) => setTagInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void addTag() }}
-            placeholder="+ 标签"
-            style={{ width: 70, fontSize: 11, padding: '2px 6px' }}
-          />
-        </div>
-
-        <a
-          href={api.exportUrl(currentDoc.id)}
-          download={`${currentDoc.title}-notes.md`}
-          className="btn-ghost"
-          style={{ fontSize: 12, display: 'inline-block', padding: '4px 10px', textDecoration: 'none' }}
-        >导出 Markdown</a>
-      </div>
-
-      <div style={{ flex: 1, overflowY: 'auto', padding: 10 }}>
-        {!annotations.length && (
-          <div className="hint" style={{ padding: 12 }}>
-            在「双语阅读」里选中文字，气泡中点色块高亮、或点「笔记」。
-            <br />PDF 视图里选中文字也能高亮。
-          </div>
-        )}
-        {groups.map((g) => (
-            <div key={g.key} style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 5 }}>
-                {g.label}
-              </div>
-              {g.items.map((a) => (
-                <div key={a.id} style={{
-                  padding: '6px 8px', marginBottom: 6, borderRadius: 6,
-                  borderLeft: `3px solid ${a.color}`, background: 'var(--bg-card)',
-                }}>
-                  {a.segment_id && (
-                    <span style={{
-                      fontSize: 9, padding: '0 4px', borderRadius: 3, marginBottom: 3,
-                      display: 'inline-block',
-                      background: a.side === 'zh' ? 'var(--zh-bg)' : 'var(--bg-active)',
-                      color: a.side === 'zh' ? 'var(--zh-fg)' : 'var(--fg-muted)',
-                    }}>{a.side === 'zh' ? '译文' : '原文'}</span>
-                  )}
-                  {a.quote && (
-                    <div style={{ fontSize: 12, marginBottom: 4, lineHeight: 1.5, color: 'var(--fg-strong)' }}>
-                      {a.quote}
-                    </div>
-                  )}
-                  {editing === a.id ? (
-                    <div>
-                      <textarea
-                        autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
-                        rows={3} style={{ width: '100%', fontSize: 12, marginBottom: 4 }}
-                      />
-                      <button className="btn-primary" style={{ fontSize: 11 }} onClick={() => void saveComment(a.id)}>保存</button>
-                      <button className="btn-ghost" style={{ fontSize: 11 }} onClick={() => setEditing(null)}>取消</button>
-                    </div>
-                  ) : (
-                    <div
-                      onClick={() => { setEditing(a.id); setDraft(a.comment ?? '') }}
-                      style={{ fontSize: 12, color: a.comment ? 'var(--fg)' : 'var(--fg-muted)', cursor: 'text', minHeight: 18 }}
-                    >
-                      {a.comment || '点击写笔记…'}
-                    </div>
-                  )}
-                  <button
-                    className="btn-ghost"
-                    style={{ fontSize: 10, padding: '1px 4px', marginTop: 2 }}
-                    onClick={() => void removeAnnotation(a.id)}
-                  >删除</button>
-                </div>
-              ))}
-            </div>
-          ))}
-      </div>
-    </>,
-    embedded, width,
-  )
-}
-
-const panelStyle: React.CSSProperties = {
-  flexShrink: 0, borderLeft: '1px solid var(--border)',
-  display: 'flex', flexDirection: 'column', background: 'var(--bg-side)',
-  overflow: 'hidden',
+  return groups.sort((x, y) => x.order - y.order)
 }

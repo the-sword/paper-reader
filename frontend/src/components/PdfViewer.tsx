@@ -17,10 +17,73 @@ import { TextLayer } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { useStore } from '../stores/useStore'
 import { api, type Annotation, type Reference } from '../api/client'
+import { ANNOTATION_COLORS } from '../lib/annotationColors'
+import { Icon, PATH_CHAT, PATH_SPARKLE } from './icons'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
-const COLORS = ['#ffd400', '#22c55e', '#3b82f6', '#ef4444', '#a855f7']
+/** 划词菜单：宽 340px（与 CSS 一致），水平钳制留 8px 边距 */
+const BUBBLE_HALF_W = 170
+const BUBBLE_EDGE = 8
+/** 选区顶部低于该视口高度时，菜单翻到选区下方 */
+const BUBBLE_FLIP_TOP = 120
+/** 「已复制」反馈的显示时长（毫秒） */
+const COPY_FEEDBACK_MS = 1200
+/** 页边批注标记：同页内 top 相差小于页高该比例的标注合并为一个标记 */
+const NOTE_MERGE_RATIO = 0.01
+/** 标记距页面右缘的间距与宽度估计（px），用于判断放页外还是页内 */
+const NOTE_MARKER_GAP = 6
+const NOTE_MARKER_W = 34
+const NOTE_ICON = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${PATH_CHAT}"/></svg>`
+
+/** 键盘事件是否落在可输入元素上（此时不响应单键快捷键） */
+function isTypingTarget(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
+}
+
+interface NoteMarkerGroup {
+  top: number
+  ids: string[]
+  color: string
+}
+
+/** 按纵向位置合并有批注的标注：同一位置多条合并为一个标记 */
+function groupNoteMarkers(anns: Annotation[]): NoteMarkerGroup[] {
+  const items = anns
+    .filter((a) => a.comment && a.rects.length)
+    .map((a) => ({ top: a.rects[0][1], id: a.id, color: a.color }))
+    .sort((x, y) => x.top - y.top)
+  const groups: NoteMarkerGroup[] = []
+  for (const it of items) {
+    const last = groups[groups.length - 1]
+    if (last && it.top - last.top < NOTE_MERGE_RATIO) last.ids.push(it.id)
+    else groups.push({ top: it.top, ids: [it.id], color: it.color })
+  }
+  return groups
+}
+
+/** 在标注层上画页边批注标记：优先贴页面右缘外侧，空间不足则放页内右侧 */
+function appendNoteMarkers(layer: HTMLElement, anns: Annotation[], onClick: (id: string) => void): void {
+  const groups = groupNoteMarkers(anns)
+  if (!groups.length) return
+  const pageEl = layer.parentElement
+  const mainRight = layer.closest('main')?.getBoundingClientRect().right ?? Infinity
+  const outside = !pageEl || pageEl.getBoundingClientRect().right + NOTE_MARKER_GAP + NOTE_MARKER_W <= mainRight
+  for (const g of groups) {
+    const el = document.createElement('div')
+    el.className = `ann-note-marker${outside ? '' : ' inside'}`
+    el.style.top = `${g.top * 100}%`
+    el.style.color = g.color
+    el.style.borderColor = g.color
+    el.style.background = `${g.color}26`
+    if (g.ids.length > 1) el.textContent = String(g.ids.length)
+    else el.innerHTML = NOTE_ICON
+    el.title = '查看笔记'
+    el.addEventListener('click', (e) => { e.stopPropagation(); onClick(g.ids[0]) })
+    layer.appendChild(el)
+  }
+}
 
 interface Props {
   url: string
@@ -37,6 +100,10 @@ interface Props {
 interface Bubble {
   x: number
   y: number
+  /** 菜单是否翻到选区下方 */
+  below: boolean
+  /** 小三角相对菜单左缘的水平位置（px） */
+  arrowX: number
   page: number
   rects: number[][]
   /** 双语页选区锚定的半侧：source=原文列 / zh=译文列 */
@@ -48,6 +115,8 @@ interface Bubble {
   latency?: number
   translating?: boolean
   transError?: string
+  /** 「复制」按钮的短暂反馈 */
+  copied?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -219,12 +288,20 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
       window.removeEventListener('resize', check)
     }
   }, [])
-  const [color, setColor] = useState(COLORS[0])
 
   // 虚拟化渲染：页面渲染完成时才创建标注层，
   // 渲染回调里需要拿到最新 annotations（不能闭包捕获旧值）
   const annotationsRef = useRef<Annotation[]>(annotations)
   annotationsRef.current = annotations
+  // 页边批注标记的点击回调：渲染回调里拿最新 store 动作，避免闭包过期
+  const markerClickRef = useRef<(id: string) => void>(() => {})
+  markerClickRef.current = (id) => {
+    useStore.getState().openRight('notes')
+    useStore.getState().setFocusAnnotation(id)
+  }
+  const askAI = useStore((s) => s.askAI)
+  const openRight = useStore((s) => s.openRight)
+  const setFocusAnnotation = useStore((s) => s.setFocusAnnotation)
 
   // ---- 参考文献气泡（点击正文 [n] 引用标）----
   const [refs, setRefs] = useState<Record<number, Reference>>({})
@@ -439,6 +516,7 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
           layer.appendChild(el)
         }
       }
+      appendNoteMarkers(layer, anns, (id) => markerClickRef.current(id))
     }
 
     const setup = async () => {
@@ -524,6 +602,7 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
           layer.appendChild(el)
         }
       }
+      appendNoteMarkers(layer, anns, (id) => markerClickRef.current(id))
     }
   }, [annotations, numPages, scale, removeAnnotation])
 
@@ -612,9 +691,18 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
     rects.splice(0, rects.length, ...merged)
 
     const first = range.getClientRects()[0]
+    const whole = range.getBoundingClientRect()
+    const cx = first.left + first.width / 2
+    const x = Math.min(
+      Math.max(cx, BUBBLE_HALF_W + BUBBLE_EDGE),
+      window.innerWidth - BUBBLE_HALF_W - BUBBLE_EDGE,
+    )
+    const below = whole.top < BUBBLE_FLIP_TOP
     setBubble({
-      x: first.left + first.width / 2,
-      y: first.top - 12,
+      x,
+      y: below ? whole.bottom + 12 : first.top - 12,
+      below,
+      arrowX: cx - x + BUBBLE_HALF_W,
       page: anchorPage,
       rects,
       side,
@@ -645,13 +733,72 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
     }
   }
 
-  const confirmHighlight = async () => {
-    if (!bubble || !currentDoc) return
-    await addAnnotation(currentDoc.id, bubble.page, bubble.rects, bubble.quote, color,
-      { side: bubble.side ?? 'source' })
+  /** 关闭划词菜单并清空选区 */
+  const closeBubble = (): void => {
     setBubble(null)
     window.getSelection()?.removeAllRanges()
   }
+
+  /** 按颜色保存划线（单击色点 / 数字键 / h 键） */
+  const saveHighlight = async (c: string): Promise<Annotation | null> => {
+    const b = bubble
+    if (!b || !currentDoc) return null
+    useStore.getState().setLastColor(c)
+    closeBubble()
+    return addAnnotation(currentDoc.id, b.page, b.rects, b.quote, c, { side: b.side ?? 'source' })
+  }
+
+  /** 笔记：以最近颜色保存，然后在右栏标注页定位并进入编辑 */
+  const noteHighlight = async (): Promise<void> => {
+    const saved = await saveHighlight(useStore.getState().lastColor)
+    if (saved) {
+      openRight('notes')
+      setFocusAnnotation(saved.id)
+    }
+  }
+
+  /** 问 AI / 解释：把选区作为引用块送入右栏问答 */
+  const askQuestion = (mode: 'ask' | 'explain'): void => {
+    const b = bubble
+    if (!b) return
+    closeBubble()
+    askAI(b.quote, b.page, mode)
+  }
+
+  /** 复制选中原文，按钮短暂显示「已复制」 */
+  const copyQuote = async (): Promise<void> => {
+    const b = bubble
+    if (!b) return
+    try {
+      await navigator.clipboard.writeText(b.quote)
+    } catch {
+      return
+    }
+    setBubble((cur) => (cur ? { ...cur, copied: true } : cur))
+    window.setTimeout(() => setBubble((cur) => (cur ? { ...cur, copied: false } : cur)), COPY_FEEDBACK_MS)
+  }
+
+  // 划词菜单键盘操作：1-4 选色保存、h 用最近颜色、a 问 AI、Esc 关闭。
+  // 捕获阶段监听并阻止冒泡，使数字键不再触发页面的缩放快捷键
+  useEffect(() => {
+    if (!bubble) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (isTypingTarget(e.target) || e.metaKey || e.ctrlKey || e.altKey) return
+      let handled = true
+      if (/^[1-4]$/.test(e.key)) void saveHighlight(ANNOTATION_COLORS[Number(e.key) - 1].color)
+      else if (e.key === 'h') void saveHighlight(useStore.getState().lastColor)
+      else if (e.key === 'a') askQuestion('ask')
+      else if (e.key === 'Escape') closeBubble()
+      else handled = false
+      if (!handled) return
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+    // 处理函数每次渲染重建，依赖 bubble 即可保证读到当前选区
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bubble, currentDoc])
 
   return (
     <div
@@ -702,48 +849,53 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false }:
       )}
       <div className="canvas-host" ref={hostRef} />
       {bubble && (
-        <div className="sel-bubble" style={{ left: bubble.x, top: bubble.y }}>
-          <div className="sel-quote">
-            “{bubble.quote.slice(0, 60)}{bubble.quote.length > 60 ? '…' : ''}”
-          </div>
-          {/* 划词翻译结果 */}
-          {bubble.translating && (
-            <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 6 }}>翻译中…</div>
-          )}
-          {bubble.translated && (
-            <div style={{ marginBottom: 6 }}>
-              <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--fg-strong)' }}>
-                {bubble.translated}
-              </div>
-              <div style={{ fontSize: 10, color: 'var(--fg-muted)', marginTop: 3 }}>
-                {bubble.engine}
-                {bubble.latency ? ` · ${bubble.latency}ms` : ''}
-              </div>
-            </div>
-          )}
-          {bubble.transError && (
-            <div style={{ fontSize: 11, color: '#b91c1c', marginBottom: 6 }}>
-              {bubble.transError}
-            </div>
-          )}
-
-          <div className="sel-actions">
-            {!bubble.translated && !bubble.translating && (
-              <button className="btn-primary" style={{ fontSize: 11, padding: '3px 10px' }}
-                onClick={() => void translateSelection()}>翻译</button>
-            )}
-            {COLORS.map((c) => (
+        <div
+          className={`sel-float${bubble.below ? ' below' : ''}`}
+          style={{ left: bubble.x, top: bubble.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onMouseUp={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="sel-bubble" style={{ '--arrow-x': `${bubble.arrowX}px` } as React.CSSProperties}>
+            {ANNOTATION_COLORS.map((c, i) => (
               <button
-                key={c}
-                className={`dot ${c === color ? 'active' : ''}`}
-                style={{ background: c }}
-                onClick={() => setColor(c)}
-                aria-label={`颜色 ${c}`}
+                key={c.color}
+                className="sel-dot"
+                style={{ background: c.color }}
+                title={`${c.label}（${i + 1}）`}
+                aria-label={`${c.label}划线`}
+                onClick={() => void saveHighlight(c.color)}
               />
             ))}
-            <button className="btn-ghost" onClick={confirmHighlight}>高亮</button>
-            <button className="btn-ghost" onClick={() => setBubble(null)}>取消</button>
+            <span className="sel-sep" />
+            <button className="sel-btn" onClick={() => askQuestion('explain')}>解释</button>
+            <button
+              className="sel-btn"
+              disabled={!!bubble.translated || !!bubble.translating}
+              onClick={() => void translateSelection()}
+            >翻译</button>
+            <button className="sel-btn sel-accent" onClick={() => askQuestion('ask')}>
+              <Icon d={PATH_SPARKLE} size={12} /> 问 AI
+            </button>
+            <button className="sel-btn" onClick={() => void noteHighlight()}>笔记</button>
+            <button className="sel-btn" onClick={() => void copyQuote()}>
+              {bubble.copied ? '已复制' : '复制'}
+            </button>
           </div>
+          {(bubble.translating || bubble.translated || bubble.transError) && (
+            <div className="sel-trans-card">
+              {bubble.translating && <div className="sel-trans-hint">翻译中…</div>}
+              {bubble.translated && (
+                <>
+                  <div className="sel-trans-text">{bubble.translated}</div>
+                  <div className="sel-trans-meta">
+                    {bubble.engine}{bubble.latency ? ` · ${bubble.latency}ms` : ''}
+                  </div>
+                </>
+              )}
+              {bubble.transError && <div className="sel-trans-err">{bubble.transError}</div>}
+            </div>
+          )}
         </div>
       )}
 

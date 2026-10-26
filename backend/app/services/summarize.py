@@ -138,15 +138,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _build_corpus(doc_id: str) -> tuple[str, int]:
+def _build_corpus(doc_id: str, with_pages: bool = False) -> tuple[str, int]:
     """把 segments 拼成给模型的正文。
 
     优先保留标题和正文，公式/图表/表格转成简短标记，
     参考文献默认跳过（除非正文不足）。
+    with_pages=True 时，页码变化处插入「〔第N页〕」标记（页码从 1 起，与前端页码一致）。
     """
     with db() as conn:
         rows = conn.execute(
-            """SELECT idx, kind, section, source FROM segments
+            """SELECT idx, kind, section, source, page FROM segments
                WHERE document_id=? ORDER BY idx""",
             (doc_id,),
         ).fetchall()
@@ -157,12 +158,14 @@ def _build_corpus(doc_id: str) -> tuple[str, int]:
     parts: list[str] = []
     used = 0
     skipped_refs: list[str] = []
+    last_page: int | None = None
 
     for r in rows:
         kind = r["kind"]
         text = (r["source"] or "").strip()
         if not text:
             continue
+        page = r["page"]
 
         if kind == "heading":
             piece = f"\n\n# {text}\n"
@@ -183,6 +186,10 @@ def _build_corpus(doc_id: str) -> tuple[str, int]:
             continue
         else:
             piece = text + "\n"
+
+        if with_pages and page != last_page:
+            piece = f"〔第{page}页〕\n" + piece
+            last_page = page
 
         if used + len(piece) > MAX_INPUT_CHARS:
             break
