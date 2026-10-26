@@ -9,9 +9,9 @@
  *      不可变文件，cache-first → 已读文献可离线打开。
  *      只缓存完整 200 响应；pdf.js 的 Range 分块请求命中缓存时由 SW 现场切成 206，
  *      绝不把部分内容写进缓存（否则离线拿到半截 PDF）。
- *  - 解析产物（segments / references / asset 图片）：stale-while-revalidate，
+ *  - 解析产物中的 asset 图片：stale-while-revalidate，
  *      离线时展示最近一次已加载的内容
- *  - 可变数据（标注 / 文献 / 文件夹 / 标签）：network-first，
+ *  - 可变数据（标注 / 文献 / 文件夹 / 标签 / segments / references）：network-first，
  *      在线保证写完再读拿到最新（杜绝「保存不显示、刷新才出现」），断网回退缓存
  *  - 其余 API：完全网络优先，不缓存（文献列表、翻译、任务状态必须实时）
  *
@@ -81,12 +81,12 @@ self.addEventListener('install', (event) => {
 // 可离线阅读的 API 资源判定
 const RE_PDF = /^\/api\/(documents\/[^/]+\/file|reading\/babeldoc\/[^/]+\/pdf)$/
 // SWR（stale-while-revalidate）：离线时用最近一次快照，在线时后台刷新——
-// 解析产物（解析一次后内容不可变）：SWR —— 秒开 + 离线可用
-const RE_READER_DATA = /^\/api\/reading\/[^/]+\/(segments|references|asset\/.+)$/
-// 会被增删改的资源（标注/文献/文件夹/标签）：network-first —— 在线必须拿最新，
-// 否则写完再读会命中 SWR 旧快照（标注「保存后不显示、刷新才出现」的成因）；
-// 断网时回退缓存保证离线可读
-const RE_MUTABLE_DATA = /^\/api\/(annotations|documents(\/[^/]+)?|folders|tags)$/
+// 仅 asset 图片按生成文件名寻址，可视为不可变
+const RE_READER_DATA = /^\/api\/reading\/[^/]+\/asset\/.+$/
+// 会被增删改的资源：network-first —— 在线必须拿最新，断网回退缓存。
+// 注意 segments/references 也会「变」：解析前打开文档会缓存空快照，
+// 若走 SWR，解析完成后的 GET 会秒回旧空数据（目录面板始终显示「解析全文」）。
+const RE_MUTABLE_DATA = /^\/api\/(annotations|documents(\/[^/]+)?|folders|tags|reading\/[^/]+\/(segments|references))$/
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
