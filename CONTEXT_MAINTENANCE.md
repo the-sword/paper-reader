@@ -29,6 +29,16 @@
 
 **原则**：凡是可能被增删改（含「空 → 有」）的 API 一律 network-first。SWR 秒回旧快照会导致「操作生效但界面不更新、刷新才出现」的错觉——标注和 segments 都踩过。segments 解析前打开文档会缓存空快照，走 SWR 会让解析完成后目录仍为空。
 
+## BabelDOC / 解析要点（2026-10 重构）
+
+- pdf2zh 用 `multiprocessing.Process`（Linux fork）跑翻译子进程；父进程替换模块全局属性会被继承——所有 babeldoc 补丁都在 `translate_pdf_async` 里、fork 前应用。
+- 子进程内真正执行在**线程池线程**里：`_apply_child_runtime_patch` 在子进程入口设 `threading.stack_size(256MB)` + `setrecursionlimit(10000)`，并让 do_translate 异常带热点位置（日志有完整 traceback）。
+- babeldoc 0.6.x 主解析走 `new_parser`（自带 XObject 防环）；legacy `PDFPageInterpreterEx.do_Do` 守卫仅兜底。给 babeldoc 打补丁必须验版本。
+- 双语生成串行（`TRANSLATE_LOCK`）；自动入队**默认关闭**（`toqueue.is_enabled`），雷达/上传导入不再自动生成双语，全部手动触发。
+- 本地解析（`parse_local`，PyMuPDF 逐页取文本）改**后台单 worker 串行**（`parse.py` 内 `_LOCAL_QUEUE`），POST 返回 `queued`，前端轮询进度；同一文档并发提交返回 409。
+- 重新解析 = 重调 POST /parse：`save_segments` 同事务内按 quote 迁移段落流标注；`parse_engine` 记录在 documents；`mark_parse_failed` 保证失败时旧内容不被标 failed。
+- 目录优先用原文 PDF 书签（`usePdfOutline`），无书签回退解析 heading。
+
 ## 数据目录
 
 - SQLite：`<repo>/paper-reader.db`（注意 `pgrep` 精确匹配，勿误杀）。
