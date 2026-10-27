@@ -6,50 +6,29 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { api, type QueueSnapshot } from '../api/client'
-import { useStore } from '../stores/useStore'
 
 export default function QueueIndicator() {
   const [snap, setSnap] = useState<QueueSnapshot | null>(null)
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
-  const prevBusy = useRef(false)
-  /** 上一轮快照中各条目的状态：用于检测 running→done 的完成边沿 */
-  const prevStatus = useRef<Map<string, string>>(new Map())
-  const refreshLibrary = useStore((s) => s.refreshLibrary)
 
-  // 轮询（有任务时 2s，空闲时 10s）
+  // 轮询只更新展示快照；完成边沿检测/通知/刷新书库统一在 App 层的 useQueueWatch
+  // （挂 App 层是因为手机阅读时本组件不挂载，通知不能丢）。有任务 2s、空闲 10s。
   useEffect(() => {
     let timer: number
-    const tick = async () => {
+    let stopped = false
+    const tick = async (): Promise<void> => {
+      if (stopped) return
       try {
-        const s = await api.babelDocQueue()
-        setSnap(s)
-        const busy = (s.counts.running ?? 0) + (s.counts.pending ?? 0) > 0
-        // 刚完成时刷新文献列表，让按钮状态跟上
-        if (prevBusy.current && !busy) void refreshLibrary()
-        // 完成边沿（上一轮 running → 本轮 done）→ 中性提示 + 「查看」动作：
-        // 点击后打开该文档并切到双语视图（经 store 的 bilingualViewRequest 中转）。
-        // failed 不弹（队列详情里已有，避免打扰）。
-        for (const it of s.items) {
-          if (it.status === 'done' && prevStatus.current.get(it.doc_id) === 'running') {
-            useStore.getState().setNotice(`《${it.title}》双语版已就绪`, {
-              label: '查看',
-              run: () => {
-                useStore.getState().requestBilingualView(it.doc_id)
-              },
-            })
-          }
-        }
-        prevStatus.current = new Map(s.items.map((it) => [it.doc_id, it.status]))
-        prevBusy.current = busy
-        timer = window.setTimeout(tick, busy ? 2000 : 10000)
+        setSnap(await api.babelDocQueue())
+        timer = window.setTimeout(tick, 2000)
       } catch {
-        timer = window.setTimeout(tick, 15000)
+        timer = window.setTimeout(tick, 10000)
       }
     }
-    tick()
-    return () => window.clearTimeout(timer)
-  }, [refreshLibrary])
+    void tick()
+    return () => { stopped = true; window.clearTimeout(timer) }
+  }, [])
 
   // 点击外部关闭
   useEffect(() => {

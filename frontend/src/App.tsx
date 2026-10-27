@@ -19,6 +19,7 @@ import ReparseMenu from './components/ReparseMenu'
 import LibraryView from './components/LibraryView'
 import { useStore } from './stores/useStore'
 import { useBilingualJob, type BilingualTarget } from './hooks/useBilingualJob'
+import { useQueueWatch } from './hooks/useQueueWatch'
 import { useReadingChrome } from './hooks/useReadingChrome'
 import { usePdfPageNav } from './hooks/usePdfPageNav'
 import { api } from './api/client'
@@ -153,11 +154,15 @@ export default function App() {
     if (d) setBaseSize({ key: `${d.id}:${viewRef.current}`, w })
   }, [])
 
-  const onBilingualDone = useCallback((target: BilingualTarget): void => {
+  const onBilingualDone = useCallback((target: BilingualTarget, docId: string): void => {
     setBaseSize(null)
-    setView(target)
+    // 仅当完成的仍是当前文档才切视图；用户已切走时不抢当前阅读视图
+    if (useStore.getState().currentDoc?.id === docId) setView(target)
   }, [])
   const bilingual = useBilingualJob(onBilingualDone)
+
+  // 队列完成监听挂 App 层（手机阅读时 TabBar/QueueIndicator 不挂载，通知不能丢）
+  useQueueWatch()
 
   /** 双语生成确认浮层：null=关闭；否则记录被点的入口按钮（完成后切对应视图） */
   const [biConfirm, setBiConfirm] = useState<'bilingual' | 'zh' | null>(null)
@@ -407,12 +412,20 @@ export default function App() {
   }, [notice, setNotice])
 
   // 队列完成通知的「查看」：打开该文档并切到双语视图（先切视图再开文档，
-  // 让 openDocument 完成后直接落在双语 PDF 上）
+  // 让 openDocument 完成后直接落在双语 PDF 上）。
+  // ready 竞态处理：切文档后 babelDocStatus 异步查询未返回时 ready 为空，
+  // 会闪「未生成」引导页；这里先探测状态，已生成则直接注入 ready 再切视图。
   useEffect(() => {
     if (!bilingualViewRequest) return
-    void useStore.getState().openDocument(bilingualViewRequest.docId).then(() => {
-      switchView('bilingual')
-      setNotice(null)
+    const docId = bilingualViewRequest.docId
+    void useStore.getState().openDocument(docId).then(() => {
+      void api.babelDocStatus(docId)
+        .then((st) => { if (st.generated) bilingual.markReady(docId) })
+        .catch(() => { /* 忽略 */ })
+        .finally(() => {
+          switchView('bilingual')
+          setNotice(null)
+        })
     })
     // switchView/setNotice 每渲染重建，依赖 requestId 的 nonce 触发即可
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -466,6 +479,7 @@ export default function App() {
       return (
         <PdfViewer
           url={api.babelDocPdfUrl(currentDoc.id)}
+          docId={currentDoc.id}
           scale={scale}
           onBaseWidth={onBaseWidth}
           dualPage={view === 'bilingual'}
@@ -476,6 +490,7 @@ export default function App() {
     return (
       <PdfViewer
         url={api.pdfUrl(currentDoc.id)}
+        docId={currentDoc.id}
         scale={scale}
         onBaseWidth={onBaseWidth}
       />

@@ -305,8 +305,11 @@ def start_babeldoc(doc_id: str, body: BabelDocReq) -> dict[str, Any]:
                 return {"job_id": existing_id, "status": existing.status}
             _BABELDOC_RUNNING.pop(doc_id, None)
 
-    # 确认 AI 可用
-    cfg = babeldoc_svc.get_ai_config_for_babeldoc()
+    # 确认 AI 可用（未配置时给明确的 400，而不是裸 RuntimeError 的 500）
+    try:
+        babeldoc_svc.get_ai_config_for_babeldoc()
+    except RuntimeError as e:
+        raise HTTPException(400, str(e)) from e
 
     import threading as _th
 

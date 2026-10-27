@@ -107,6 +107,10 @@ def _local_worker_loop() -> None:
 
 def _run_local(doc_id: str) -> None:
     """执行一次本地解析并回写进度（worker 与测试共用）。"""
+    # 排队期间文档可能被删除：跳过，避免白跑一次完整解析
+    if not library.get_document(doc_id):
+        _set_progress(doc_id, state="failed", progress=0, error="文档已删除")
+        return
     pdf = library.pdf_path_of(doc_id)
     if not pdf:
         parser.mark_parse_failed(doc_id)

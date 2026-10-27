@@ -25,10 +25,12 @@ export interface BilingualJob {
   start: (target?: BilingualTarget) => Promise<void>
   /** 取消正在进行的任务 */
   cancel: () => Promise<void>
+  /** 外部确认某文档双语已生成时直接写入 ready（避免异步状态查询窗口期闪「未生成」） */
+  markReady: (docId: string) => void
 }
 
 /** 双语 PDF（BabelDOC）后台任务：启动、轮询进度、完成回调与取消 */
-export function useBilingualJob(onDone: (target: BilingualTarget) => void): BilingualJob {
+export function useBilingualJob(onDone: (target: BilingualTarget, docId: string) => void): BilingualJob {
   const [jobId, setJobId] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -75,7 +77,7 @@ export function useBilingualJob(onDone: (target: BilingualTarget) => void): Bili
       if (st.status === 'done') {
         setReady((m) => ({ ...m, [docId]: true }))
         void useStore.getState().refreshLibrary()
-        onDoneRef.current(targetRef.current)
+        onDoneRef.current(targetRef.current, docId)
         return
       }
       useStore.setState({ error: `双语 PDF 生成失败：${st.error ?? '未知原因'}` })
@@ -108,5 +110,9 @@ export function useBilingualJob(onDone: (target: BilingualTarget) => void): Bili
     try { await api.cancelBabelDoc(jobId) } catch { /* 忽略 */ }
   }
 
-  return { running, progress, message, target, ready, start, cancel }
+  const markReady = (docId: string): void => {
+    setReady((m) => (m[docId] ? m : { ...m, [docId]: true }))
+  }
+
+  return { running, progress, message, target, ready, start, cancel, markReady }
 }

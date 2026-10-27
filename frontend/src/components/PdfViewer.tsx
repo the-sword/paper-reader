@@ -106,6 +106,8 @@ function appendNoteMarkers(layer: HTMLElement, anns: Annotation[], onClick: (id:
 
 interface Props {
   url: string
+  /** url 对应的文档 id：共享注册表（pdfRegistry）的键，须与 url 同源传入 */
+  docId?: string
   scale: number
   /** 文档加载后回调原始页面宽度（PDF pt，scale=1 时的宽度），用于「适应宽度」 */
   onBaseWidth?: (w: number) => void
@@ -274,7 +276,7 @@ async function extractRefsFromPdf(pdf: PDFDocumentProxy): Promise<Record<number,
   return out
 }
 
-export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false, halfView }: Props) {
+export default function PdfViewer({ url, docId, scale, onBaseWidth, dualPage = false, halfView }: Props) {
   /** 译文视图：页元素为半宽裁剪盒，完整几何仍按双栏页计算 */
   const halfMode = halfView === 'zh'
   /** 双栏坐标约定（双语与译文视图共用：右半列为译文） */
@@ -383,8 +385,9 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false, h
       .then(async (pdf) => {
         if (cancelled) { void pdf.destroy(); return }
         pdfRef.current = pdf
-        // 注册到共享表：usePdfOutline 等复用同一实例，避免同一份 PDF 下载两遍
-        const docId = useStore.getState().currentDoc?.id
+        // 注册到共享表：usePdfOutline 等复用同一实例，避免同一份 PDF 下载两遍。
+        // 键用 props.docId（与 url 同一 effect 闭包），不用实时 currentDoc——
+        // 快速切文档时后者可能已指向新文档，会把实例注册到错误的键
         if (docId) setRegisteredPdf(docId, pdf)
         setNumPages(pdf.numPages)
         setLoading(false)
@@ -411,12 +414,11 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false, h
       const pdf = pdfRef.current
       pdfRef.current = null
       // 先从共享表注销（通知目录 hook 等订阅者），再销毁实例
-      const docId = useStore.getState().currentDoc?.id
       if (docId && pdf) deleteRegisteredPdf(docId)
       if (pdf) void pdf.destroy()
       void task.destroy().catch(() => { /* 忽略重复销毁 */ })
     }
-  }, [url, onBaseWidth])
+  }, [url, docId, onBaseWidth])
 
   // 同一文档在原文双栏 ↔ 译文之间切换：URL 不变，只补报一次与当前模式匹配的基准宽
   useEffect(() => {
