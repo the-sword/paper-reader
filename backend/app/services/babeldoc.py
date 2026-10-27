@@ -12,11 +12,16 @@ do_translate_async_stream 获取实时进度事件。
 from __future__ import annotations
 
 import asyncio
+import functools
+import logging
 import os
 import re
+import sys
 import threading
+import traceback
+from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..core.config import get_settings
 from ..core.db import db
@@ -86,6 +91,12 @@ _APPENDIX_DESIG_RE = re.compile(r"([A-Za-z0-9]{1,3}(?:\.\d+)*)\s*([:：.．\-–
 _patch_lock = threading.Lock()
 _patch_applied = False
 _patch_applied_xobj = False
+_patch_applied_child = False
+
+#: 子进程递归深度上限默认值（环境变量 PAPER_READER_BABEL_RECURSION 覆盖）
+CHILD_RECURSION_LIMIT_DEFAULT = 10000
+#: 子进程新建线程的栈大小默认值，单位 MB（环境变量 PAPER_READER_BABEL_STACK_MB 覆盖）
+CHILD_THREAD_STACK_MB_DEFAULT = 256
 
 
 def _skip_layout_set() -> frozenset[str]:
@@ -156,6 +167,22 @@ def _mark_reference_sections(docs: Any) -> None:
                 in_refs = True
 
 
+def _make_translate_wrapper(orig: Callable[..., Any]) -> Callable[..., Any]:
+    """包装翻译器 translate：入口先做参考文献区域标记，再调用原方法。
+
+    orig 绑定在工厂参数上（而非循环变量），避免闭包晚绑定；已包装过的方法直接返回，保证幂等。
+    """
+    if getattr(orig, "_pr_wrapped", False):
+        return orig
+
+    def _translate_wrapper(self: Any, docs: Any, *args: Any, **kwargs: Any) -> Any:
+        _mark_reference_sections(docs)
+        return orig(self, docs, *args, **kwargs)
+
+    _translate_wrapper._pr_wrapped = True  # type: ignore[attr-defined]
+    return _translate_wrapper
+
+
 def _apply_skip_translation_patch() -> None:
     """给 babeldoc 翻译器打「跳过标题/参考文献/致谢」补丁（幂等、线程安全）。
 
@@ -168,8 +195,6 @@ def _apply_skip_translation_patch() -> None:
         if _patch_applied:
             return
         try:
-            import logging
-
             from babeldoc.format.pdf.document_il.midend import (
                 il_translator as _it,
             )
@@ -194,13 +219,7 @@ def _apply_skip_translation_patch() -> None:
             for cls in (_it.ILTranslator, getattr(_it_llm, "ILTranslatorLLMOnly", None)):
                 if cls is None:
                     continue
-                orig_translate = cls.translate
-
-                def _translate_wrapper(self, docs, *args, **kwargs):
-                    _mark_reference_sections(docs)
-                    return orig_translate(self, docs, *args, **kwargs)
-
-                cls.translate = _translate_wrapper
+                cls.translate = _make_translate_wrapper(cls.translate)
             _patch_applied = True
         except Exception as exc:  # noqa: BLE001 - 补丁失败仅告警，不阻断翻译
             logging.getLogger(__name__).warning(
@@ -208,62 +227,173 @@ def _apply_skip_translation_patch() -> None:
             )
 
 
+def _make_xobj_guard(orig: Callable[..., Any], max_depth: int) -> Callable[..., Any]:
+    """包装 do_Do：按 XObject 对象身份判环 + 限制嵌套深度，超限则跳过该子树。
+
+    调用链栈挂在 device 上（dup interpreter 间共享）。orig 绑定在工厂参数上，
+    同一工厂既用于 legacy PDFPageInterpreter，也用于 PDFPageInterpreterEx。
+    """
+    if getattr(orig, "_pr_wrapped", False):
+        return orig
+    from babeldoc.pdfminer.pdftypes import stream_value
+    from babeldoc.pdfminer.psparser import literal_name
+
+    log = logging.getLogger(__name__)
+
+    def _do_wrapper(self: Any, xobjid_arg: Any, *args: Any, **kwargs: Any) -> Any:
+        dev = self.device
+        stack = getattr(dev, "_pr_xobj_stack", None)
+        if stack is None:
+            stack = dev._pr_xobj_stack = []
+        # 按对象身份判环（同名 XObject 在不同资源域下可合法复用）
+        try:
+            key: int | None = id(stream_value(self.xobjmap.get(literal_name(xobjid_arg))))
+        except Exception:  # noqa: BLE001 - 资源缺失交给原逻辑报错
+            key = None
+        if (key is not None and key in stack) or len(stack) >= max_depth:
+            log.warning("跳过循环/过深嵌套的 XObject: %r（深度 %d）", xobjid_arg, len(stack))
+            return None
+        stack.append(key)
+        try:
+            return orig(self, xobjid_arg, *args, **kwargs)
+        finally:
+            stack.pop()
+
+    _do_wrapper._pr_wrapped = True  # type: ignore[attr-defined]
+    return _do_wrapper
+
+
 def _apply_xobj_recursion_guard() -> None:
-    """给 babeldoc 内置 pdfminer 的 do_Do 加「循环引用 + 深度」守卫。
+    """给 babeldoc 的 do_Do 加「循环引用 + 深度」守卫（幂等、线程安全）。
 
-    pdfminer 处理 Form XObject 走 Python 递归（do_Do → render_contents），
-    无深度上限：PDF 里 XObject 自引用或超深嵌套会抛
-    RecursionError（如 "maximum recursion depth exceeded in comparison"）。
-    这里在 device（dup interpreter 间共享）上挂调用链栈：
-    同一 XObject 对象再次进入或深度超限 → 记警告并跳过该子树。
-
-    pdf2zh 用 multiprocessing.Process 跑 babeldoc，Linux fork 启动方式
-    会继承本补丁。
+    这是旧版 legacy 解析路径（PDFPageInterpreter）的兜底：pdfminer 处理
+    Form XObject 走 Python 递归，XObject 自引用或超深嵌套会抛 RecursionError。
+    babeldoc 0.6.x 的 new_parser 自带防环（MAX_XOBJECT_NESTING_DEPTH=64），
+    实际主路径以它为准；这里同时守卫 PDFPageInterpreterEx（当前实际使用的子类）。
+    pdf2zh 用 multiprocessing.Process 跑 babeldoc，Linux fork 启动方式会继承本补丁。
     """
     global _patch_applied_xobj
     with _patch_lock:
         if _patch_applied_xobj:
             return
         try:
-            import logging
-
+            from babeldoc.format.pdf import pdfinterp as _ex_mod
             from babeldoc.pdfminer.pdfinterp import PDFPageInterpreter
-            from babeldoc.pdfminer.psparser import literal_name
-            from babeldoc.pdfminer.pdftypes import stream_value
 
             # 正常论文 XObject 嵌套约数层；给足余量又远低于递归上限
             max_depth = int(os.environ.get("PAPER_READER_MAX_XOBJ_DEPTH", "32"))
-            orig_do = PDFPageInterpreter.do_Do
-            log = logging.getLogger(__name__)
-
-            def _do_wrapper(self, xobjid_arg, *args, **kwargs):
-                dev = self.device
-                stack = getattr(dev, "_pr_xobj_stack", None)
-                if stack is None:
-                    stack = dev._pr_xobj_stack = []
-                # 按对象身份判环（同名 XObject 在不同资源域下可合法复用）
-                try:
-                    key = id(stream_value(
-                        self.xobjmap.get(literal_name(xobjid_arg))))
-                except Exception:  # noqa: BLE001 - 资源缺失交给原逻辑报错
-                    key = None
-                if (key is not None and key in stack) or len(stack) >= max_depth:
-                    log.warning(
-                        "跳过循环/过深嵌套的 XObject: %r（深度 %d）",
-                        xobjid_arg, len(stack),
-                    )
-                    return
-                stack.append(key)
-                try:
-                    return orig_do(self, xobjid_arg, *args, **kwargs)
-                finally:
-                    stack.pop()
-
-            PDFPageInterpreter.do_Do = _do_wrapper
+            PDFPageInterpreter.do_Do = _make_xobj_guard(PDFPageInterpreter.do_Do, max_depth)
+            ex_cls = getattr(_ex_mod, "PDFPageInterpreterEx", None)
+            if ex_cls is not None and "do_Do" in vars(ex_cls):
+                ex_cls.do_Do = _make_xobj_guard(ex_cls.do_Do, max_depth)
             _patch_applied_xobj = True
         except Exception as exc:  # noqa: BLE001 - 补丁失败仅告警
             logging.getLogger(__name__).warning(
                 "XObject 递归守卫补丁未生效（babeldoc 版本不兼容？）: %s", exc
+            )
+
+
+def _child_recursion_limit() -> int:
+    """子进程递归深度上限（环境变量可覆盖）。"""
+    return int(os.environ.get("PAPER_READER_BABEL_RECURSION", str(CHILD_RECURSION_LIMIT_DEFAULT)))
+
+
+def _child_stack_bytes() -> int:
+    """子进程新建线程的栈字节数（环境变量 MB 可覆盖）。"""
+    mb = int(os.environ.get("PAPER_READER_BABEL_STACK_MB", str(CHILD_THREAD_STACK_MB_DEFAULT)))
+    return mb * 1024 * 1024
+
+
+def _wrap_child_entry(orig: Callable[..., Any]) -> Callable[..., Any]:
+    """包装 pdf2zh 子进程入口：子进程内先放大线程栈与递归上限，再执行原入口。
+
+    threading.stack_size 只影响之后新建的线程；子进程里 babeldoc 的执行器线程
+    是在此之后才创建的，因此能生效。绝不能在父进程（uvicorn）里调用这两项。
+    """
+    if getattr(orig, "_pr_wrapped", False):
+        return orig
+
+    @functools.wraps(orig)
+    def _child_entry(*args: Any, **kwargs: Any) -> Any:
+        threading.stack_size(_child_stack_bytes())
+        sys.setrecursionlimit(max(sys.getrecursionlimit(), _child_recursion_limit()))
+        return orig(*args, **kwargs)
+
+    _child_entry._pr_wrapped = True  # type: ignore[attr-defined]
+    return _child_entry
+
+
+def _short_path(path: str) -> str:
+    """把绝对路径截成 site-packages/ 或 app/ 之后的相对路径，便于日志阅读。"""
+    for marker in ("site-packages/", "/app/"):
+        i = path.rfind(marker)
+        if i >= 0:
+            return path[i + len(marker):]
+    return os.path.basename(path)
+
+
+def _hotspot(exc: BaseException) -> str:
+    """定位异常热点：RecursionError 取出现次数最多的帧，其他异常取最后一帧。"""
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return "未知位置"
+    if isinstance(exc, RecursionError):
+        counts = Counter((f.filename, f.lineno, f.name) for f in frames)
+        (fn, ln, name), n = counts.most_common(1)[0]
+        return f"{_short_path(fn)}:{ln} {name}（重复 {n} 次）"
+    last = frames[-1]
+    return f"{_short_path(last.filename)}:{last.lineno} {last.name}"
+
+
+def _wrap_do_translate(orig: Callable[..., Any]) -> Callable[..., Any]:
+    """包装 babeldoc.do_translate：异常时在子进程日志里打完整 traceback，并把热点位置写进异常消息。
+
+    debug=False 时 babeldoc 不打 traceback，这里补上；消息改写失败不影响原异常抛出。
+    """
+    if getattr(orig, "_pr_wrapped", False):
+        return orig
+    log = logging.getLogger(__name__)
+
+    @functools.wraps(orig)
+    def _do_translate(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return orig(*args, **kwargs)
+        except Exception as exc:
+            log.error(
+                "BabelDOC do_translate 异常:\n%s",
+                "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+            )
+            try:
+                loc = _hotspot(exc)
+                if exc.args:
+                    exc.args = (f"{exc.args[0]}（位置: {loc}）",) + tuple(exc.args[1:])
+            except Exception:  # noqa: BLE001 - 改写失败忽略，保留原异常
+                pass
+            raise
+
+    _do_translate._pr_wrapped = True  # type: ignore[attr-defined]
+    return _do_translate
+
+
+def _apply_child_runtime_patch() -> None:
+    """给 pdf2zh 子进程入口与 babeldoc.do_translate 打补丁（幂等、线程安全）。
+
+    必须在 translate_pdf_async 中、fork 子进程之前调用：fork 会继承替换后的模块属性。
+    """
+    global _patch_applied_child
+    with _patch_lock:
+        if _patch_applied_child:
+            return
+        try:
+            from babeldoc.format.pdf import high_level as bd_hl
+            from pdf2zh_next import high_level as p2z_hl
+
+            p2z_hl._translate_wrapper = _wrap_child_entry(p2z_hl._translate_wrapper)
+            bd_hl.do_translate = _wrap_do_translate(bd_hl.do_translate)
+            _patch_applied_child = True
+        except Exception as exc:  # noqa: BLE001 - 补丁失败仅告警
+            logging.getLogger(__name__).warning(
+                "子进程运行时补丁未生效（pdf2zh/babeldoc 版本不兼容？）: %s", exc
             )
 
 
@@ -339,6 +469,8 @@ async def translate_pdf_async(
     _apply_skip_translation_patch()
     # XObject 循环引用/深嵌套守卫（防 RecursionError）
     _apply_xobj_recursion_guard()
+    # 子进程递归上限/线程栈 + 异常热点定位（fork 前必须完成）
+    _apply_child_runtime_patch()
 
     from pdf2zh_next import high_level
 
