@@ -1,4 +1,4 @@
-"""后台翻译队列：导入后自动排队生成双语 PDF。
+"""后台翻译队列：导入后可选自动排队生成双语 PDF（默认关闭，需手动开启）。
 
 设计要点（对应 2C2G VPS 的内存约束）：
   - **严格串行**：同时只跑 1 个 BabelDOC 任务（单任务峰值约 258MB），
@@ -56,7 +56,7 @@ _WORKER: threading.Thread | None = None
 _STOP = threading.Event()
 _CANCEL_CURRENT = threading.Event()
 
-# 是否启用自动入队（默认开启）
+# 是否启用自动入队（默认关闭：双语 PDF 全部由用户手动生成）
 _ENABLED_KEY = "babeldoc.auto_queue.enabled"
 
 
@@ -66,13 +66,13 @@ def is_enabled() -> bool:
             "SELECT value FROM settings WHERE key=?", (_ENABLED_KEY,)
         ).fetchone()
     if not row:
-        return True  # 默认开启
+        return False  # 默认关闭
     try:
         import json
 
-        return bool(json.loads(row["value"]).get("enabled", True))
+        return bool(json.loads(row["value"]).get("enabled", False))
     except Exception:
-        return True
+        return False
 
 
 def set_enabled(enabled: bool) -> None:

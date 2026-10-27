@@ -34,6 +34,8 @@ const SCALE_STEP = 0.15
 const MOBILE_SCALE_MIN = 0.15
 /** 跳页定位后目标页闪烁描边的时长（毫秒） */
 const FLASH_MS = 600
+/** 解析迁移提示条的显示时长（毫秒） */
+const NOTICE_MS = 8000
 
 /** 阅读主题的切换顺序（值与 ReaderSettings 中的 theme 一致） */
 const THEME_CYCLE: Array<{ value: ReaderPrefs['theme']; label: string }> = [
@@ -72,6 +74,8 @@ export default function App() {
   const leftOpen = useStore((s) => s.leftOpen)
   const jumpRequest = useStore((s) => s.jumpRequest)
   const showReparse = useStore((s) => s.showReparse)
+  const notice = useStore((s) => s.notice)
+  const setNotice = useStore((s) => s.setNotice)
   const setShowReparse = useStore((s) => s.setShowReparse)
   const rightTab = useStore((s) => s.rightTab)
   const openRight = useStore((s) => s.openRight)
@@ -368,6 +372,12 @@ export default function App() {
     return () => clearTimeout(t)
   }, [error, clearError])
 
+  useEffect(() => {
+    if (!notice) return
+    const t = setTimeout(() => setNotice(null), NOTICE_MS)
+    return () => clearTimeout(t)
+  }, [notice, setNotice])
+
   const commands = useMemo<PaletteCommand[]>(() => {
     const base: PaletteCommand[] = [
       { id: 'library', label: '打开书库', run: () => setMainView('library') },
@@ -574,6 +584,21 @@ export default function App() {
       {showArxiv && <ArxivPanel onClose={() => setShowArxiv(false)} />}
       {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
       {showReparse && <ReparseMenu />}
+
+      {notice && !error && (
+        // 轻量提示：中性配色，不同于错误条
+        <div
+          onClick={() => setNotice(null)}
+          style={{
+            position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+            background: 'var(--bg-card)', color: 'var(--fg)', border: '1px solid var(--border)',
+            padding: '8px 14px', borderRadius: 8, boxShadow: 'var(--shadow-pop)',
+            fontSize: 12, maxWidth: '70vw', zIndex: 3000, cursor: 'pointer',
+          }}
+        >
+          {notice}
+        </div>
+      )}
 
       {error && (
         <div style={{

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import {
   api,
-  type Annotation, type DocumentMeta, type Folder, type Segment, type Tag,
+  type Annotation, type DocumentMeta, type Folder, type RemapReport, type Segment, type Tag,
 } from '../api/client'
 import { DEFAULT_ANNOTATION_COLOR } from '../lib/annotationColors'
 
@@ -122,6 +122,14 @@ export function sortDocuments(docs: DocumentMeta[], sort: LibrarySort): Document
   return list
 }
 
+/** 段落流标注无法自动对应时给出提示；全部迁移成功则不打扰 */
+function announceRemap(remap?: RemapReport): void {
+  if (!remap || remap.detached <= 0) return
+  useStore.setState({
+    notice: `重新解析完成：${remap.detached} 条段落标注无法自动对应，已保留为页面标注`,
+  })
+}
+
 interface State {
   // 库
   folders: Folder[]
@@ -167,6 +175,9 @@ interface State {
   showReparse: boolean
   setShowReparse: (v: boolean) => void
   parseState: string
+  /** 轻量提示条文案（非错误，如重新解析后标注迁移结果）；定时自动清除 */
+  notice: string | null
+  setNotice: (msg: string | null) => void
   parseProgress: number
   engines: import('../api/client').EngineInfo[]
   selectedEngine: string | null   // null = 自动（按优先级）
@@ -250,7 +261,9 @@ export const useStore = create<State>((set, get) => ({
   mineruReady: false,
   showReparse: false,
   setShowReparse: (v) => set({ showReparse: v }),
-  parseState: 'idle',   // idle=未解析 | pending/running=进行中 | done | failed
+  parseState: 'idle',   // idle=未解析 | queued=排队中 | pending/running=进行中 | done | failed
+  notice: null,
+  setNotice: (msg) => set({ notice: msg }),
   parseProgress: 0,
   engines: [],
   selectedEngine: null,
@@ -530,8 +543,9 @@ export const useStore = create<State>((set, get) => ({
       if (r.state === 'done') {
         await get().loadSegments(doc.id)
         set({ parseState: 'done', parseProgress: 100 })
+        announceRemap(r.remap)
       } else {
-        set({ parseState: r.state, parseProgress: 10 })
+        set({ parseState: r.state, parseProgress: r.state === 'queued' ? 0 : 10 })
         await get().pollParse(doc.id)
       }
     } catch (e) {
@@ -550,6 +564,7 @@ export const useStore = create<State>((set, get) => ({
         set({ parseState: p.state, parseProgress: p.progress ?? 0 })
         if (p.state === 'done') {
           await get().loadSegments(docId)
+          announceRemap(p.remap)
           return
         }
         if (p.state === 'failed') {

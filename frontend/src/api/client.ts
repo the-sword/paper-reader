@@ -75,12 +75,18 @@ export interface SegmentsResp {
   cached_translations: number
   segments: Segment[]
 }
+/** 重新解析的段落标注迁移结果 */
+export interface RemapReport {
+  remapped: number
+  detached: number
+}
 export interface ParseProgress {
   state: string
   progress: number
   segments?: number
   error?: string | null
   task_id?: string
+  remap?: RemapReport
 }
 export interface EngineStatus {
   mineru_configured: boolean
@@ -370,7 +376,7 @@ export const api = {
 
   // ---- 阅读（解析 + 翻译）----
   startParse: (docId: string, engine: 'auto' | 'mineru' | 'local' = 'auto') =>
-    req<{ engine: string; state: string; segments?: number; task_id?: string }>(
+    req<{ engine: string; state: string; segments?: number; task_id?: string; remap?: RemapReport }>(
       `/reading/${docId}/parse`, { method: 'POST', body: JSON.stringify({ engine }) }),
   parseProgress: (docId: string) => req<ParseProgress>(`/reading/${docId}/parse/progress`),
   getSegments: (docId: string) => req<SegmentsResp>(`/reading/${docId}/segments`),

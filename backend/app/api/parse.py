@@ -1,6 +1,8 @@
 """解析与翻译 API。"""
 from __future__ import annotations
 
+import logging
+import queue
 import threading
 from typing import Any
 
@@ -12,6 +14,7 @@ from ..services import engines as engines_svc
 from ..services import library, mineru, parser, translate
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # 后台解析任务的进度（进程内，单用户够用）
 _progress: dict[str, dict[str, Any]] = {}
@@ -19,7 +22,12 @@ _lock = threading.Lock()
 
 
 #: 内存中视为「正在解析」的状态；重启后内存清空，不会被残留的 DB 状态永久阻塞
-_BUSY_STATES = ("running", "pending")
+_BUSY_STATES = ("queued", "running", "pending")
+
+#: 本地解析队列：单 worker 串行执行，避免多篇同时解析占满 2 核 CPU
+_LOCAL_QUEUE: queue.Queue[str] = queue.Queue()
+_worker_lock = threading.Lock()
+_local_worker: threading.Thread | None = None
 
 
 def _set_progress(doc_id: str, **kw: Any) -> None:
@@ -76,6 +84,45 @@ class GlossaryReq(BaseModel):
 # 解析
 # ---------------------------------------------------------------------------
 
+def _ensure_local_worker() -> None:
+    """懒启动本地解析 worker（daemon 线程，全进程只有一个）。"""
+    global _local_worker
+    with _worker_lock:
+        if _local_worker is None or not _local_worker.is_alive():
+            _local_worker = threading.Thread(target=_local_worker_loop, name="local-parse", daemon=True)
+            _local_worker.start()
+
+
+def _local_worker_loop() -> None:
+    """逐个取出文献做本地解析；单篇异常只记录，不能让线程退出。"""
+    while True:
+        doc_id = _LOCAL_QUEUE.get()
+        try:
+            _run_local(doc_id)
+        except Exception:  # noqa: BLE001 - worker 必须存活
+            logger.exception("本地解析 worker 异常: %s", doc_id)
+        finally:
+            _LOCAL_QUEUE.task_done()
+
+
+def _run_local(doc_id: str) -> None:
+    """执行一次本地解析并回写进度（worker 与测试共用）。"""
+    pdf = library.pdf_path_of(doc_id)
+    if not pdf:
+        parser.mark_parse_failed(doc_id)
+        _set_progress(doc_id, state="failed", progress=0, error="PDF 文件缺失")
+        return
+    _set_progress(doc_id, state="running", progress=30, error=None)
+    try:
+        report = parser.parse_local_and_save(doc_id, pdf)
+    except Exception as e:  # noqa: BLE001
+        parser.mark_parse_failed(doc_id)
+        _set_progress(doc_id, state="failed", progress=0, error=str(e))
+        return
+    _set_progress(doc_id, state="done", progress=100,
+                  segments=report["segments"], remap=report, error=None)
+
+
 def _run_mineru(doc_id: str, task_id: str) -> None:
     """后台轮询 MinerU 任务直到完成，然后把结果落成 segments。"""
     import time
@@ -90,14 +137,14 @@ def _run_mineru(doc_id: str, task_id: str) -> None:
                               segments=report["segments"], remap=report, error=None)
                 return
             if state == "failed":
-                parser.set_parse_status(doc_id, "failed")
+                parser.mark_parse_failed(doc_id)
                 _set_progress(doc_id, state="failed", error="MinerU 解析失败")
                 return
             time.sleep(3)
-        parser.set_parse_status(doc_id, "failed")
+        parser.mark_parse_failed(doc_id)
         _set_progress(doc_id, state="failed", error="解析超时")
     except Exception as e:  # noqa: BLE001
-        parser.set_parse_status(doc_id, "failed")
+        parser.mark_parse_failed(doc_id)
         _set_progress(doc_id, state="failed", error=str(e))
 
 
@@ -121,24 +168,21 @@ def start_parse(doc_id: str, body: ParseReq, bg: BackgroundTasks) -> dict[str, A
         raise HTTPException(409, "正在解析中，请等待当前任务完成")
 
     if engine == "local":
-        try:
-            report = parser.parse_local_and_save(doc_id, pdf)
-        except Exception as e:  # noqa: BLE001
-            _set_progress(doc_id, state="failed", progress=0, error=str(e))
-            raise HTTPException(500, f"本地解析失败：{e}") from e
-        _set_progress(doc_id, state="done", progress=100,
-                      segments=report["segments"], remap=report, error=None)
-        return {"engine": "local", "segments": report["segments"], "remap": report, "state": "done"}
+        # 入队后立即返回，由单 worker 串行执行；进度通过 /parse/progress 轮询
+        _set_progress(doc_id, state="queued", progress=0, error=None)
+        _ensure_local_worker()
+        _LOCAL_QUEUE.put(doc_id)
+        return {"engine": "local", "state": "queued"}
 
     # MinerU：提交失败必须把内存状态置为 failed，否则会阻塞后续解析
     try:
         info = parser.parse_with_mineru(doc_id, pdf)
     except mineru.MinerUError as e:
-        parser.set_parse_status(doc_id, "failed")
+        parser.mark_parse_failed(doc_id)
         _set_progress(doc_id, state="failed", progress=0, error=str(e))
         raise HTTPException(502, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        parser.set_parse_status(doc_id, "failed")
+        parser.mark_parse_failed(doc_id)
         _set_progress(doc_id, state="failed", progress=0, error=str(e))
         raise HTTPException(500, f"MinerU 提交失败：{e}") from e
 

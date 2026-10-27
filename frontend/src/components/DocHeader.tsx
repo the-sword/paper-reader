@@ -1,6 +1,7 @@
 import { useStore } from '../stores/useStore'
 import { api } from '../api/client'
 import type { BilingualJob } from '../hooks/useBilingualJob'
+import { parseStatusText } from '../lib/parseStatus'
 import type { ReaderPrefs } from './ReaderSettings'
 import ReaderSettings from './ReaderSettings'
 import {
@@ -129,7 +130,7 @@ export default function DocHeader(props: Props) {
         </button>
       )}
       {!isMobile && parsing && (
-        <span className="hint" style={{ whiteSpace: 'nowrap' }}>解析中 {parseProgress.toFixed(0)}%</span>
+        <span className="hint" style={{ whiteSpace: 'nowrap' }}>{parseStatusText(parseState, parseProgress)}</span>
       )}
       {!isMobile && hasSegments && !parsing && (
         // 已解析：弱化的「重新解析」，打开引擎选择浮层（目录不对时的补救入口）

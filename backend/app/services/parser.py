@@ -454,6 +454,21 @@ def set_parse_status(doc_id: str, status: str) -> None:
         conn.execute("UPDATE documents SET parse_status=? WHERE id=?", (status, doc_id))
 
 
+def mark_parse_failed(doc_id: str) -> None:
+    """解析失败时写回状态：库里仍有段落（重新解析场景的旧内容）则保持 done，否则 failed。
+
+    避免重新解析失败后已有内容的文献从「已解析」视图中消失。
+    """
+    with db() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) AS n FROM segments WHERE document_id=?", (doc_id,)
+        ).fetchone()["n"]
+        conn.execute(
+            "UPDATE documents SET parse_status=? WHERE id=?",
+            ("done" if n > 0 else "failed", doc_id),
+        )
+
+
 def list_segments(doc_id: str) -> list[dict[str, Any]]:
     with db() as conn:
         rows = conn.execute(
@@ -517,7 +532,7 @@ def parse_local_and_save(doc_id: str, pdf_path: Path) -> dict[str, int]:
     set_parse_status(doc_id, "running")
     segs = parse_local(pdf_path)
     if not segs:
-        set_parse_status(doc_id, "failed")
+        mark_parse_failed(doc_id)
         raise RuntimeError("本地解析未提取到任何段落（可能是扫描件，需 OCR）")
     return save_segments_report(doc_id, segs, "local")
 

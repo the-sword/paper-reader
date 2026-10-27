@@ -1,10 +1,13 @@
 /**
  * 阅读区左栏：目录 / 标注两个页签 + 底部阅读进度卡。
- * 目录来自解析产物的 heading 段落；点击条目或标注即跳到对应页。
+ * 目录优先使用原文 PDF 书签；没有书签时回退到解析产物的 heading 段落。
+ * 点击条目或标注即跳到对应页。
  */
 import { useMemo, useState } from 'react'
 import { useStore } from '../stores/useStore'
 import type { Annotation, Segment } from '../api/client'
+import { parseStatusText } from '../lib/parseStatus'
+import { usePdfOutline, type OutlineItem } from '../hooks/usePdfOutline'
 import { Icon, PATH_PENCIL } from './icons'
 
 /** 阅读估算：每页约需的分钟数（用于「约剩 N 分钟」） */
@@ -20,13 +23,6 @@ interface Props {
   fluid?: boolean
   /** 跳页后的回调（手机端用于关闭目录抽屉） */
   onNavigate?: () => void
-}
-
-interface OutlineItem {
-  id: string
-  title: string
-  page: number
-  depth: number
 }
 
 /** 由 heading 段落生成目录：深度 = 编号中的点数，无编号为 0 */
@@ -68,13 +64,17 @@ export default function OutlinePanel({ page, pageCount, fluid = false, onNavigat
   const parseState = useStore((s) => s.parseState)
   const parseProgress = useStore((s) => s.parseProgress)
   const pagePos = useStore((s) => s.pagePos)
+  const bookmark = usePdfOutline(currentDoc?.id ?? null)
   const [tab, setTab] = useState<'outline' | 'notes'>('outline')
   const jumpTo = (p: number): void => {
     requestJump(p)
     onNavigate?.()
   }
 
-  const items = useMemo(() => buildOutline(segments), [segments])
+  const parsedItems = useMemo(() => buildOutline(segments), [segments])
+  const fromBookmark = bookmark.items.length > 0
+  const items = fromBookmark ? bookmark.items : parsedItems
+  const sourceLabel = fromBookmark ? '来自 PDF 书签' : '来自解析结果'
   const current = currentSectionIndex(items, page)
   const sortedAnns = useMemo(
     () => [...annotations].sort((a, b) => a.page - b.page),
@@ -116,9 +116,15 @@ export default function OutlinePanel({ page, pageCount, fluid = false, onNavigat
           <>
             {parsing && (
               // 解析中不展示旧目录，避免与即将替换的段落对不上
-              <div className="hint" style={{ padding: '16px 6px' }}>解析中 {parseProgress.toFixed(0)}%</div>
+              <div className="hint" style={{ padding: '16px 6px' }}>{parseStatusText(parseState, parseProgress)}</div>
             )}
-            {!parsing && !parsed && (
+            {!parsing && items.length > 0 && (
+              <div className="hint" style={{ fontSize: 10, padding: '2px 8px 6px' }}>{sourceLabel}</div>
+            )}
+            {!parsing && items.length === 0 && bookmark.loading && (
+              <div className="hint" style={{ padding: '16px 6px' }}>正在读取 PDF 书签…</div>
+            )}
+            {!parsing && items.length === 0 && !bookmark.loading && !parsed && (
               <div className="hint" style={{ padding: '16px 6px', lineHeight: 1.8 }}>
                 解析全文后生成目录
                 <div>
@@ -127,16 +133,16 @@ export default function OutlinePanel({ page, pageCount, fluid = false, onNavigat
                 </div>
               </div>
             )}
-            {!parsing && parsed && items.length === 0 && (
-              <div className="hint" style={{ padding: '16px 6px' }}>未识别到章节标题</div>
+            {!parsing && items.length === 0 && !bookmark.loading && parsed && (
+              <>
+                <div className="hint" style={{ padding: '16px 6px' }}>未识别到章节标题</div>
+                <div style={{ padding: '6px' }}>
+                  <button className="btn-ghost" style={{ fontSize: 11, border: 'none', color: 'var(--fg-muted)' }}
+                    onClick={() => setShowReparse(true)}>重新解析</button>
+                </div>
+              </>
             )}
-            {!parsing && parsed && items.length === 0 && (
-              <div style={{ padding: '6px' }}>
-                <button className="btn-ghost" style={{ fontSize: 11, border: 'none', color: 'var(--fg-muted)' }}
-                  onClick={() => setShowReparse(true)}>重新解析</button>
-              </div>
-            )}
-            {parsing ? null : items.map((it, i) => {
+            {!parsing && items.map((it, i) => {
               const active = i === current
               const dot = sectionColor(items, i, annotations)
               return (
@@ -163,7 +169,8 @@ export default function OutlinePanel({ page, pageCount, fluid = false, onNavigat
                 </div>
               )
             })}
-            {!parsing && parsed && items.length > 0 && (
+            {!parsing && parsed && !fromBookmark && items.length > 0 && (
+              // 目录来自解析结果时才提供重新解析；书签目录与解析无关
               <div style={{ padding: '10px 8px 4px' }}>
                 <button
                   className="btn-ghost"

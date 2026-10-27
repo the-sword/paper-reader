@@ -37,7 +37,7 @@ async def upload(file: UploadFile = File(...),
     folder_ids = [folder_id] if folder_id else None
     doc = library.import_bytes(data, file.filename, folder_ids=folder_ids)
 
-    # 新文献自动进入双语 PDF 队列（已存在的不重复入队）
+    # 开启自动入队时，新文献进入双语 PDF 队列（默认关闭；已存在的不重复入队）
     if not doc.get("duplicated"):
         try:
             from ..services import toqueue
