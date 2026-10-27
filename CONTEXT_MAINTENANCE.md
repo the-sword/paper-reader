@@ -32,6 +32,7 @@
 ## BabelDOC / 解析要点（2026-10 重构）
 
 - pdf2zh 用 `multiprocessing.Process`（Linux fork）跑翻译子进程；父进程替换模块全局属性会被继承——所有 babeldoc 补丁都在 `translate_pdf_async` 里、fork 前应用。
+- **「maximum recursion depth exceeded in comparison」根因（480b615）**：`translate_pdf_async` 里 `on_progress = _progress_capture` 闭包重绑导致进度回调自递归，首个进度事件必炸、与论文无关。勿再用「重绑局部名」让两个闭包共享变量。
 - 子进程内真正执行在**线程池线程**里：`_apply_child_runtime_patch` 在子进程入口设 `threading.stack_size(256MB)` + `setrecursionlimit(10000)`，并让 do_translate 异常带热点位置（日志有完整 traceback）。
 - babeldoc 0.6.x 主解析走 `new_parser`（自带 XObject 防环）；legacy `PDFPageInterpreterEx.do_Do` 守卫仅兜底。给 babeldoc 打补丁必须验版本。
 - 双语生成串行（`TRANSLATE_LOCK`）；自动入队**默认关闭**（`toqueue.is_enabled`），雷达/上传导入不再自动生成双语，全部手动触发。
