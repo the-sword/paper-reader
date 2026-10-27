@@ -13,6 +13,8 @@ export default function QueueIndicator() {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const prevBusy = useRef(false)
+  /** 上一轮快照中各条目的状态：用于检测 running→done 的完成边沿 */
+  const prevStatus = useRef<Map<string, string>>(new Map())
   const refreshLibrary = useStore((s) => s.refreshLibrary)
 
   // 轮询（有任务时 2s，空闲时 10s）
@@ -25,6 +27,20 @@ export default function QueueIndicator() {
         const busy = (s.counts.running ?? 0) + (s.counts.pending ?? 0) > 0
         // 刚完成时刷新文献列表，让按钮状态跟上
         if (prevBusy.current && !busy) void refreshLibrary()
+        // 完成边沿（上一轮 running → 本轮 done）→ 中性提示 + 「查看」动作：
+        // 点击后打开该文档并切到双语视图（经 store 的 bilingualViewRequest 中转）。
+        // failed 不弹（队列详情里已有，避免打扰）。
+        for (const it of s.items) {
+          if (it.status === 'done' && prevStatus.current.get(it.doc_id) === 'running') {
+            useStore.getState().setNotice(`《${it.title}》双语版已就绪`, {
+              label: '查看',
+              run: () => {
+                useStore.getState().requestBilingualView(it.doc_id)
+              },
+            })
+          }
+        }
+        prevStatus.current = new Map(s.items.map((it) => [it.doc_id, it.status]))
         prevBusy.current = busy
         timer = window.setTimeout(tick, busy ? 2000 : 10000)
       } catch {
@@ -96,7 +112,7 @@ export default function QueueIndicator() {
                 checked={snap.enabled}
                 style={{ width: 'auto', margin: 0 }}
                 onChange={async (e) => {
-                  await api.setQueueEnabled(e.target.checked)
+                  await api.setBabelDocAuto(e.target.checked)
                   setSnap((s) => (s ? { ...s, enabled: e.target.checked } : s))
                 }}
               />

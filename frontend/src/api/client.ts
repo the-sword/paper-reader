@@ -500,9 +500,12 @@ export const api = {
   selfcheck: (quick = false) =>
     req<SelfCheckResult>(`/system/selfcheck?quick=${quick}`),
   babelDocQueue: () => req<QueueSnapshot>('/reading/babeldoc/queue'),
-  setQueueEnabled: (enabled: boolean) =>
-    req<{ ok: boolean; enabled: boolean }>('/reading/babeldoc/queue/toggle',
-      { method: 'POST', body: JSON.stringify({ enabled }) }),
+  /** 读取「导入后自动生成双语 PDF」开关 */
+  getBabelDocAuto: () => req<{ enabled: boolean }>('/reading/babeldoc/auto'),
+  /** 写入「导入后自动生成双语 PDF」开关（打开前前端需弹风险确认） */
+  setBabelDocAuto: (enabled: boolean) =>
+    req<{ ok: boolean; enabled: boolean }>('/reading/babeldoc/auto',
+      { method: 'PUT', body: JSON.stringify({ enabled }) }),
   retryQueueItem: (docId: string) =>
     req<{ ok: boolean }>(`/reading/babeldoc/queue/${docId}/retry`, { method: 'POST' }),
   babelDocStatus: (docId: string) =>

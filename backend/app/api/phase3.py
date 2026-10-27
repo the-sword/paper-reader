@@ -454,6 +454,19 @@ class QueueToggleReq(BaseModel):
 
 
 
+@router.get("/babeldoc/auto")
+def babeldoc_auto_status() -> dict[str, Any]:
+    """查询「导入后自动生成双语 PDF」开关状态（默认关闭）。"""
+    return {"enabled": queue_svc.is_enabled()}
+
+
+@router.put("/babeldoc/auto")
+def babeldoc_auto_set(body: QueueToggleReq) -> dict[str, Any]:
+    """设置「导入后自动生成双语 PDF」开关。"""
+    queue_svc.set_enabled(body.enabled)
+    return {"ok": True, "enabled": body.enabled}
+
+
 @router.get("/babeldoc/queue")
 def queue_snapshot() -> dict[str, Any]:
     """队列全貌：启停状态、计数、条目列表。"""

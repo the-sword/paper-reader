@@ -12,7 +12,7 @@ const AI_PRESETS = [
   { label: '阿里百炼', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
 ]
 
-type Tab = 'ai' | 'engines' | 'glossary' | 'mineru' | 'radar' | 'backup' | 'system'
+type Tab = 'ai' | 'engines' | 'glossary' | 'bilingual' | 'mineru' | 'radar' | 'backup' | 'system'
 
 export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>('engines')
@@ -21,6 +21,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
     ['engines', '翻译引擎'],
     ['ai', 'AI 接口'],
     ['glossary', '术语表'],
+    ['bilingual', '双语 PDF'],
     ['mineru', 'MinerU'],
     ['radar', '🛰 雷达'],
     ['backup', '备份'],
@@ -69,6 +70,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           {tab === 'engines' && <EnginesTab />}
           {tab === 'ai' && <AITab onSaved={() => { /* no-op */ }} />}
           {tab === 'glossary' && <GlossaryTab />}
+          {tab === 'bilingual' && <BilingualTab />}
           {tab === 'mineru' && <MinerUTab />}
           {tab === 'radar' && <RadarTopicsEditor />}
           {tab === 'backup' && <BackupTab />}
@@ -526,6 +528,87 @@ function GlossaryTab() {
         <button className="btn-primary" onClick={() => void save()}>保存</button>
         {msg && <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{msg}</span>}
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+
+/** 打开自动生成开关前的风险确认文案（明确成本：常驻内存 / 满核 CPU / LLM 费用） */
+const BILINGUAL_AUTO_WARN =
+  '自动生成会在每篇论文导入后常驻占用约 300MB 内存、每次满核 CPU 数分钟，' +
+  '并产生额外 LLM 调用费用。低配 VPS 上可能造成界面卡顿。确定开启？'
+
+/**
+ * 「双语 PDF」设置页：导入后自动生成开关（默认关闭）+ 手动生成说明。
+ *
+ * 打开开关必须先经风险确认（BILINGUAL_AUTO_WARN），确认后才 PUT true；
+ * 关闭无风险，直接 PUT false。
+ */
+function BilingualTab() {
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const [msg, setMsg] = useState('')
+
+  useEffect(() => {
+    void api.getBabelDocAuto()
+      .then((r) => setEnabled(r.enabled))
+      .catch((e) => setMsg(String(e)))
+  }, [])
+
+  const save = async (next: boolean): Promise<void> => {
+    // 打开属重成本操作：必须显式确认；用户取消则保持原状
+    if (next && !window.confirm(BILINGUAL_AUTO_WARN)) return
+    setMsg('')
+    try {
+      await api.setBabelDocAuto(next)
+      setEnabled(next)
+      setMsg(next ? '已开启：新导入的论文会自动排队生成双语 PDF' : '已关闭')
+    } catch (e) {
+      setMsg(String(e))
+    }
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 0, lineHeight: 1.7 }}>
+        双语 PDF 由 BabelDOC 本地排版生成（保留原论文版式，左原文右译文）。
+        生成属重计算操作：满核 CPU 数分钟 + LLM 调用费用。
+        默认<b>不自动生成</b>，需要时在阅读器顶部点「双语 / 译文」手动生成。
+      </p>
+
+      <div style={{ ...boxStyle, display: 'flex', alignItems: 'center', gap: 10 }}>
+        <input
+          type="checkbox"
+          checked={enabled === true}
+          disabled={enabled === null}
+          style={{ width: 'auto', margin: 0 }}
+          onChange={(e) => void save(e.target.checked)}
+        />
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>
+            导入后自动生成双语 PDF
+            {enabled !== null && (
+              <span style={{
+                marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8,
+                background: enabled ? '#22c55e22' : '#9ca3af22',
+                color: enabled ? '#16a34a' : 'var(--fg-muted)', fontWeight: 400,
+              }}>{enabled ? '已开启' : '已关闭'}</span>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 3, lineHeight: 1.6 }}>
+            每篇论文导入后自动排队（串行，同时只跑 1 个任务，峰值约 300MB 内存）。
+          </div>
+        </div>
+      </div>
+
+      {msg && (
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 4 }}>{msg}</div>
+      )}
+
+      <p style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 14, lineHeight: 1.7 }}>
+        手动生成：阅读器顶部「双语 / 译文」按钮（同样会先弹成本确认）。
+        队列进度见顶栏的队列指示器，失败可在其中重试。
+      </p>
     </div>
   )
 }

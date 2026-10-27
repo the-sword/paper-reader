@@ -14,6 +14,8 @@ interface Props {
   view: ViewMode
   onViewChange: (v: ViewMode) => void
   bilingual: BilingualJob
+  /** 未生成态点击双语/译文时回调（App 层弹成本确认浮层后再 start） */
+  onBilingualConfirm?: (target: 'bilingual' | 'zh') => void
   readerPrefs: ReaderPrefs
   onReaderPrefsChange: (next: ReaderPrefs) => void
   rightOpen: boolean
@@ -50,20 +52,36 @@ export default function DocHeader(props: Props) {
   const hasSegments = segments.length > 0
   const parsing = parseState === 'running' || parseState === 'pending' || parseState === 'queued'
   const biReady = bilingual.ready[currentDoc.id] === true
+  /** 当前文档的双语任务是否正在生成（生成中按钮禁点、显示进度） */
+  const biRunning = bilingual.running
+  const biProgress = Math.round(bilingual.progress)
   const meta = [
     `${currentDoc.page_count ?? '?'} 页`,
     `添加于 ${shortDate(currentDoc.added_at)}`,
   ].join(' · ')
 
-  /** 双语 / 译文：已生成则切换，未生成则触发生成（完成后切到被点的视图） */
+  /** 双语 / 译文：已生成则切换；未生成则弹成本确认（App 层触发 start） */
   const onDualClick = (target: 'bilingual' | 'zh') => {
     if (biReady) onViewChange(target)
-    else void bilingual.start(target)
+    else props.onBilingualConfirm?.(target)
   }
 
-  /** 生成中只在被点的那个按钮上显示进度 */
-  const dualLabel = (target: 'bilingual' | 'zh', text: string): string =>
-    bilingual.running && bilingual.target === target ? `生成中 ${Math.round(bilingual.progress)}%` : text
+  /** 生成中：两个按钮同状态显示进度；未生成：加「未生成」小标 */
+  const dualLabel = (_target: 'bilingual' | 'zh', text: string): React.ReactNode => {
+    if (biRunning) {
+      const pct = `${biProgress > 0 ? ` ${biProgress}%` : '…'}`
+      return <span style={{ whiteSpace: 'nowrap' }}>{text}{pct}</span>
+    }
+    if (!biReady) {
+      return (
+        <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, whiteSpace: 'nowrap' }}>
+          {text}
+          <span style={{ fontSize: 9, opacity: 0.75 }}>未生成</span>
+        </span>
+      )
+    }
+    return text
+  }
 
   return (
     <header className="reader-header">
@@ -101,17 +119,21 @@ export default function DocHeader(props: Props) {
         {/* 手机端双栏太窄：不显示双语，偏好为双语时实际使用译文视图 */}
         {!isMobile && (
           <button
-            className={`seg ${view === 'bilingual' ? 'active' : ''}`}
-            title={biReady ? '在页面内阅读双语 PDF（保留原排版）' : '生成保留原排版的双语 PDF'}
+            className={`seg${!biReady ? ' seg-bi-muted' : ''} ${view === 'bilingual' ? 'active' : ''}`}
+            title={biReady
+              ? '在页面内阅读双语 PDF（保留原排版）'
+              : biRunning ? '双语 PDF 正在生成…' : '生成保留原排版的双语 PDF（点击确认成本）'}
             onClick={() => onDualClick('bilingual')}
-            disabled={bilingual.running}
+            disabled={!biReady && biRunning}
           >{dualLabel('bilingual', '双语')}</button>
         )}
         <button
-          className={`seg ${view === 'zh' ? 'active' : ''}`}
-          title={biReady ? '只看右半译文列' : '生成双语 PDF 后可看译文列'}
+          className={`seg${!biReady && !biRunning ? ' seg-bi-muted' : ''} ${view === 'zh' ? 'active' : ''}`}
+          title={biReady
+            ? '只看右半译文列'
+            : biRunning ? '双语 PDF 正在生成…' : '生成双语 PDF 后可看译文列（点击确认成本）'}
           onClick={() => onDualClick('zh')}
-          disabled={bilingual.running}
+          disabled={!biReady && biRunning}
         >{dualLabel('zh', '译文')}</button>
       </div>
 

@@ -3,9 +3,15 @@ import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { api } from '../api/client'
+import { getRegisteredPdf, subscribeRegisteredPdf } from '../lib/pdfRegistry'
 
 // 与 PdfViewer 一致：本 hook 可能先于 PdfViewer 挂载，需自行保证 worker 已配置
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
+
+/** 等待 PdfViewer 注册 PDF 实例的超时（毫秒）；超时才回退自行 getDocument */
+const AWAIT_REGISTRY_MS = 15000
+/** 等待期间的轮询间隔（毫秒） */
+const AWAIT_POLL_MS = 300
 
 /** 目录条目：页码从 1 开始，depth 为书签嵌套层级（0 为顶层） */
 export interface OutlineItem {
@@ -56,14 +62,63 @@ async function loadBookmarks(docId: string): Promise<OutlineItem[]> {
   })
   const pdf = await task.promise
   try {
-    const outline = (await pdf.getOutline()) as BookmarkNode[] | null
-    if (!outline?.length) return []
-    const items: OutlineItem[] = []
-    await walk(pdf, outline, 0, items)
-    return items
+    return await readOutlineItems(pdf)
   } finally {
     void pdf.destroy()
   }
+}
+
+/** 从给定 PDF 实例解析书签（不负责实例的销毁） */
+async function readOutlineItems(pdf: PDFDocumentProxy): Promise<OutlineItem[]> {
+  const outline = (await pdf.getOutline()) as BookmarkNode[] | null
+  if (!outline?.length) return []
+  const items: OutlineItem[] = []
+  await walk(pdf, outline, 0, items)
+  return items
+}
+
+/**
+ * 等待 PdfViewer 注册的同一文档实例：命中即复用（零额外下载）。
+ * 先查已有注册，再挂订阅 + 300ms 轮询双保险；最多等 AWAIT_REGISTRY_MS，
+ * 超时（如 OutlinePanel 单独使用、加载失败）返回 null，由调用方回退。
+ */
+async function awaitRegisteredPdf(docId: string): Promise<PDFDocumentProxy | null> {
+  const existing = getRegisteredPdf(docId)
+  if (existing) return existing
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (pdf: PDFDocumentProxy | null): void => {
+      if (done) return
+      done = true
+      window.clearInterval(poll)
+      unsubscribe()
+      resolve(pdf)
+    }
+    const unsubscribe = subscribeRegisteredPdf((id, pdf) => {
+      if (id === docId) finish(pdf)
+    })
+    const poll = window.setInterval(() => {
+      const pdf = getRegisteredPdf(docId)
+      if (pdf) finish(pdf)
+    }, AWAIT_POLL_MS)
+    window.setTimeout(() => finish(null), AWAIT_REGISTRY_MS)
+  })
+}
+
+/**
+ * 加载书签入口：优先复用阅读器已加载的 PDF（首开只下载一份）；
+ * 超时等不到实例才回退轻量 getDocument。
+ */
+async function loadBookmarksSmart(docId: string): Promise<OutlineItem[]> {
+  const pdf = await awaitRegisteredPdf(docId)
+  if (pdf) {
+    try {
+      return await readOutlineItems(pdf)
+    } catch {
+      // 共享实例解析失败（如已被销毁）→ 走回退路径
+    }
+  }
+  return loadBookmarks(docId)
 }
 
 interface OutlineState {
@@ -91,7 +146,7 @@ export function usePdfOutline(docId: string | null): { items: OutlineItem[]; loa
     }
     let alive = true
     setState({ docId, items: [], loading: true })
-    loadBookmarks(docId)
+    loadBookmarksSmart(docId)
       .then((items) => {
         cache.set(docId, items)
         if (alive) setState({ docId, items, loading: false })

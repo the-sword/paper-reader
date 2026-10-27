@@ -1,16 +1,14 @@
 import { useStore } from '../stores/useStore'
-import type { BilingualJob } from '../hooks/useBilingualJob'
 import QueueIndicator from './QueueIndicator'
 import { Icon, PATH_PLUS, PATH_X, PATH_COMMAND, PATH_SEARCH } from './icons'
 
 interface Props {
-  bilingual: BilingualJob
   onOpenPalette: () => void
   onOpenSettings: () => void
 }
 
-/** 文档标签页栏：左侧标签，右侧搜索 / 队列 / 双语进度 / AI 状态 */
-export default function TabBar({ bilingual, onOpenPalette, onOpenSettings }: Props) {
+/** 文档标签页栏：左侧标签，右侧搜索 / 队列 / AI 状态（双语进度统一到阅读器顶部按钮） */
+export default function TabBar({ onOpenPalette, onOpenSettings }: Props) {
   const openTabs = useStore((s) => s.openTabs)
   const currentDoc = useStore((s) => s.currentDoc)
   const aiReady = useStore((s) => s.aiReady)
@@ -86,17 +84,6 @@ export default function TabBar({ bilingual, onOpenPalette, onOpenSettings }: Pro
         </button>
 
         <QueueIndicator />
-
-        {bilingual.running && (
-          <span style={{ fontSize: 11, color: 'var(--fg-muted)', whiteSpace: 'nowrap' }}>
-            双语 {Math.round(bilingual.progress)}%
-            <button
-              className="btn-ghost"
-              style={{ fontSize: 10, padding: '0 4px', marginLeft: 4 }}
-              onClick={() => void bilingual.cancel()}
-            >取消</button>
-          </span>
-        )}
 
         <button
           onClick={onOpenSettings}

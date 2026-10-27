@@ -18,6 +18,7 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { useStore } from '../stores/useStore'
 import { api, type Annotation, type Reference } from '../api/client'
 import { ANNOTATION_COLORS } from '../lib/annotationColors'
+import { setRegisteredPdf, deleteRegisteredPdf } from '../lib/pdfRegistry'
 import { Icon, PATH_CHAT, PATH_SPARKLE } from './icons'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
@@ -382,6 +383,9 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false, h
       .then(async (pdf) => {
         if (cancelled) { void pdf.destroy(); return }
         pdfRef.current = pdf
+        // 注册到共享表：usePdfOutline 等复用同一实例，避免同一份 PDF 下载两遍
+        const docId = useStore.getState().currentDoc?.id
+        if (docId) setRegisteredPdf(docId, pdf)
         setNumPages(pdf.numPages)
         setLoading(false)
         clearStaleShellFlag()
@@ -406,6 +410,9 @@ export default function PdfViewer({ url, scale, onBaseWidth, dualPage = false, h
       cancelled = true
       const pdf = pdfRef.current
       pdfRef.current = null
+      // 先从共享表注销（通知目录 hook 等订阅者），再销毁实例
+      const docId = useStore.getState().currentDoc?.id
+      if (docId && pdf) deleteRegisteredPdf(docId)
       if (pdf) void pdf.destroy()
       void task.destroy().catch(() => { /* 忽略重复销毁 */ })
     }

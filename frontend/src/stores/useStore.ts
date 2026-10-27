@@ -23,6 +23,13 @@ export interface ChatQuote {
   text: string
   page: number
 }
+/** 提示条动作：点击整条提示时执行（如「查看」跳转到目标文档） */
+export interface NoticeAction {
+  /** 动作按钮文案 */
+  label: string
+  /** 点击时执行的动作 */
+  run: () => void
+}
 /** 自动发送的问题（「解释」用），由 ChatPanel 消费后清空 */
 export interface ChatAutoSend {
   text: string
@@ -175,9 +182,14 @@ interface State {
   showReparse: boolean
   setShowReparse: (v: boolean) => void
   parseState: string
-  /** 轻量提示条文案（非错误，如重新解析后标注迁移结果）；定时自动清除 */
+  /** 轻量提示条：文案 + 可选动作（如队列完成「查看」）；定时自动清除 */
   notice: string | null
-  setNotice: (msg: string | null) => void
+  /** 提示条点击动作（随 notice 一起设置/清除） */
+  noticeAction: NoticeAction | null
+  setNotice: (msg: string | null, action?: NoticeAction | null) => void
+  /** 队列完成通知请求打开某文档的双语视图（switchView 在 App 内，经此中转） */
+  bilingualViewRequest: { docId: string; nonce: number } | null
+  requestBilingualView: (docId: string) => void
   parseProgress: number
   engines: import('../api/client').EngineInfo[]
   selectedEngine: string | null   // null = 自动（按优先级）
@@ -263,7 +275,11 @@ export const useStore = create<State>((set, get) => ({
   setShowReparse: (v) => set({ showReparse: v }),
   parseState: 'idle',   // idle=未解析 | queued=排队中 | pending/running=进行中 | done | failed
   notice: null,
-  setNotice: (msg) => set({ notice: msg }),
+  noticeAction: null,
+  setNotice: (msg, action) => set({ notice: msg, noticeAction: action ?? null }),
+  bilingualViewRequest: null,
+  requestBilingualView: (docId) =>
+    set({ bilingualViewRequest: { docId, nonce: (get().bilingualViewRequest?.nonce ?? 0) + 1 } }),
   parseProgress: 0,
   engines: [],
   selectedEngine: null,

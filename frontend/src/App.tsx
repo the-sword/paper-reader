@@ -12,6 +12,7 @@ import Resizer from './components/Resizer'
 import NavRail from './components/NavRail'
 import TabBar from './components/TabBar'
 import DocHeader, { type ViewMode } from './components/DocHeader'
+import BilingualConfirmOverlay from './components/BilingualConfirmOverlay'
 import ReaderToolbar from './components/ReaderToolbar'
 import CommandPalette, { type PaletteCommand } from './components/CommandPalette'
 import ReparseMenu from './components/ReparseMenu'
@@ -75,7 +76,9 @@ export default function App() {
   const jumpRequest = useStore((s) => s.jumpRequest)
   const showReparse = useStore((s) => s.showReparse)
   const notice = useStore((s) => s.notice)
+  const noticeAction = useStore((s) => s.noticeAction)
   const setNotice = useStore((s) => s.setNotice)
+  const bilingualViewRequest = useStore((s) => s.bilingualViewRequest)
   const setShowReparse = useStore((s) => s.setShowReparse)
   const rightTab = useStore((s) => s.rightTab)
   const openRight = useStore((s) => s.openRight)
@@ -155,6 +158,31 @@ export default function App() {
     setView(target)
   }, [])
   const bilingual = useBilingualJob(onBilingualDone)
+
+  /** 双语生成确认浮层：null=关闭；否则记录被点的入口按钮（完成后切对应视图） */
+  const [biConfirm, setBiConfirm] = useState<'bilingual' | 'zh' | null>(null)
+
+  /** 各入口统一的「未生成 → 弹成本确认」入口；确认后 start 并切到目标视图 */
+  const requestBilingualConfirm = useCallback((target: 'bilingual' | 'zh'): void => {
+    const doc = useStore.getState().currentDoc
+    if (!doc || bilingual.running) return
+    if (bilingual.ready[doc.id]) {
+      // 已生成：无需确认，直接切视图（兜底，正常由调用方先判 ready）
+      setView(target)
+      return
+    }
+    setBiConfirm(target)
+  }, [bilingual.running, bilingual.ready])
+
+  /** 确认浮层「开始生成」：启动任务并切到被点的视图（完成后 onDone 再校正） */
+  const startConfirmedBilingual = useCallback((target: 'bilingual' | 'zh'): void => {
+    setBiConfirm(null)
+    const doc = useStore.getState().currentDoc
+    if (!doc || bilingual.running) return
+    setBaseSize(null)
+    setView(target)
+    void bilingual.start(target)
+  }, [bilingual])
 
   const pageNav = usePdfPageNav({
     mainRef, scale, docId: currentDoc?.id ?? null, view,
@@ -290,11 +318,11 @@ export default function App() {
     }
   }
 
-  /** 原文 / 双语切换：双语未生成时触发生成 */
+  /** 原文 / 双语切换：双语未生成时弹成本确认（与按钮/⌘K 同一入口） */
   const onBilingualClick = (): void => {
     if (!currentDoc) return
     if (bilingual.ready[currentDoc.id]) switchView('bilingual')
-    else void bilingual.start()
+    else setBiConfirm('bilingual')
   }
 
   // 适应宽度的去重 key 必须包含视图：
@@ -378,6 +406,18 @@ export default function App() {
     return () => clearTimeout(t)
   }, [notice, setNotice])
 
+  // 队列完成通知的「查看」：打开该文档并切到双语视图（先切视图再开文档，
+  // 让 openDocument 完成后直接落在双语 PDF 上）
+  useEffect(() => {
+    if (!bilingualViewRequest) return
+    void useStore.getState().openDocument(bilingualViewRequest.docId).then(() => {
+      switchView('bilingual')
+      setNotice(null)
+    })
+    // switchView/setNotice 每渲染重建，依赖 requestId 的 nonce 触发即可
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bilingualViewRequest?.nonce])
+
   const commands = useMemo<PaletteCommand[]>(() => {
     const base: PaletteCommand[] = [
       { id: 'library', label: '打开书库', run: () => setMainView('library') },
@@ -397,7 +437,7 @@ export default function App() {
       { id: 'parse', label: '解析全文', run: () => { void useStore.getState().startParse('auto') } },
       { id: 'reparse', label: '重新解析…', run: () => setShowReparse(true) },
     ]
-    if (!biReady) doc.push({ id: 'bi-gen', label: '生成双语 PDF', run: () => { void bilingual.start() } })
+    if (!biReady) doc.push({ id: 'bi-gen', label: '生成双语 PDF', run: () => { setBiConfirm('bilingual') } })
     return [...base, ...doc]
     // 命令闭包读取的是最新渲染的状态，随渲染重建即可
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -414,9 +454,12 @@ export default function App() {
     }
     if (view === 'bilingual' || view === 'zh') {
       if (!bilingual.ready[currentDoc.id]) {
+        const genning = bilingual.running
         return (
-          <div className="hint" style={{ padding: 40, textAlign: 'center' }}>
-            尚未生成双语 PDF，请点击顶部「双语」或「译文」生成
+          <div className="hint" style={{ padding: 40, textAlign: 'center', lineHeight: 2.2 }}>
+            {genning
+              ? <>双语 PDF 正在生成（{Math.round(bilingual.progress)}%）…进度见顶部「双语」按钮</>
+              : <>尚未生成双语 PDF：点击顶部「双语」或「译文」按钮，确认成本后开始生成</>}
           </div>
         )
       }
@@ -464,6 +507,7 @@ export default function App() {
               view={view}
               onViewChange={switchView}
               bilingual={bilingual}
+              onBilingualConfirm={requestBilingualConfirm}
               readerPrefs={readerPrefs}
               onReaderPrefsChange={setReaderPrefs}
               rightOpen={rightOpen}
@@ -480,6 +524,7 @@ export default function App() {
             view={view}
             onViewChange={switchView}
             bilingual={bilingual}
+            onBilingualConfirm={requestBilingualConfirm}
             readerPrefs={readerPrefs}
             onReaderPrefsChange={setReaderPrefs}
             rightOpen={rightOpen}
@@ -547,7 +592,6 @@ export default function App() {
 
       <div className="app-content">
         <TabBar
-          bilingual={bilingual}
           onOpenPalette={() => setPaletteOpen(true)}
           onOpenSettings={() => setShowSettings(true)}
         />
@@ -580,23 +624,44 @@ export default function App() {
         </>
       )}
 
+      {biConfirm && currentDoc && (
+        <BilingualConfirmOverlay
+          docTitle={currentDoc.title}
+          target={biConfirm}
+          onCancel={() => setBiConfirm(null)}
+          onStart={() => startConfirmedBilingual(biConfirm)}
+        />
+      )}
+
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
       {showArxiv && <ArxivPanel onClose={() => setShowArxiv(false)} />}
       {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
       {showReparse && <ReparseMenu />}
 
       {notice && !error && (
-        // 轻量提示：中性配色，不同于错误条
+        // 轻量提示：中性配色，不同于错误条；带动作时点击整条触发（如队列完成「查看」）
         <div
-          onClick={() => setNotice(null)}
+          onClick={() => {
+            if (noticeAction) {
+              noticeAction.run()
+              return
+            }
+            setNotice(null)
+          }}
           style={{
             position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)',
             background: 'var(--bg-card)', color: 'var(--fg)', border: '1px solid var(--border)',
             padding: '8px 14px', borderRadius: 8, boxShadow: 'var(--shadow-pop)',
             fontSize: 12, maxWidth: '70vw', zIndex: 3000, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 10,
           }}
         >
-          {notice}
+          <span>{notice}</span>
+          {noticeAction && (
+            <span style={{ color: 'var(--accent)', fontWeight: 600, flexShrink: 0 }}>
+              {noticeAction.label}
+            </span>
+          )}
         </div>
       )}
 

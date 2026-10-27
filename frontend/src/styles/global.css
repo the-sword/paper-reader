@@ -432,6 +432,11 @@ main::-webkit-scrollbar-track { background: transparent; }
   border-color: var(--accent);
   color: #fff;
 }
+/* 双语未生成的弱化态：muted 色加虚线边框，提示需手动生成（克制，不抢视觉） */
+.seg.seg-bi-muted:not(.active) {
+  color: var(--fg-muted);
+  border-style: dashed;
+}
 
 /* KaTeX 公式颜色跟随主题 */
 .katex { color: var(--fg-strong); }
