@@ -586,7 +586,7 @@ async def translate_pdf_async(
     def _progress_capture(pct: float, msg: str) -> None:
         if pct > 0:
             _last_event[0] = _time.monotonic()
-        if on_progress:
+        if on_progress and on_progress is not _progress_capture:
             on_progress(pct, msg)
 
     # 用 _progress_capture 替换后续实际转发（_run 里引用的是 on_progress 参数，
