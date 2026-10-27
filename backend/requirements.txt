@@ -1,4 +1,7 @@
 fastapi>=0.110
+# PDF 文件接口依赖 FileResponse 的 HTTP Range 分块（206），
+# starlette 0.41.0 起原生支持；老版本会退化为整本传输，VPS 带宽下首开极慢
+starlette>=0.41
 uvicorn[standard]>=0.29
 pydantic>=2.6
 pydantic-settings>=2.2
