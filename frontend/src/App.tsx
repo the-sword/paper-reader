@@ -14,6 +14,7 @@ import TabBar from './components/TabBar'
 import DocHeader, { type ViewMode } from './components/DocHeader'
 import ReaderToolbar from './components/ReaderToolbar'
 import CommandPalette, { type PaletteCommand } from './components/CommandPalette'
+import ReparseMenu from './components/ReparseMenu'
 import LibraryView from './components/LibraryView'
 import { useStore } from './stores/useStore'
 import { useBilingualJob, type BilingualTarget } from './hooks/useBilingualJob'
@@ -70,6 +71,8 @@ export default function App() {
   const setRightOpen = useStore((s) => s.setRightOpen)
   const leftOpen = useStore((s) => s.leftOpen)
   const jumpRequest = useStore((s) => s.jumpRequest)
+  const showReparse = useStore((s) => s.showReparse)
+  const setShowReparse = useStore((s) => s.setShowReparse)
   const rightTab = useStore((s) => s.rightTab)
   const openRight = useStore((s) => s.openRight)
   /** 手机端 AI 抽屉与目录抽屉的吸附档位（各自独立） */
@@ -382,6 +385,7 @@ export default function App() {
       { id: 'view-pdf', label: '切到原文', run: () => switchView('pdf') },
       { id: 'view-bi', label: '切到双语', run: onBilingualClick },
       { id: 'parse', label: '解析全文', run: () => { void useStore.getState().startParse('auto') } },
+      { id: 'reparse', label: '重新解析…', run: () => setShowReparse(true) },
     ]
     if (!biReady) doc.push({ id: 'bi-gen', label: '生成双语 PDF', run: () => { void bilingual.start() } })
     return [...base, ...doc]
@@ -569,6 +573,7 @@ export default function App() {
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
       {showArxiv && <ArxivPanel onClose={() => setShowArxiv(false)} />}
       {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
+      {showReparse && <ReparseMenu />}
 
       {error && (
         <div style={{

@@ -42,6 +42,7 @@ export default function DocHeader(props: Props) {
   const parseProgress = useStore((s) => s.parseProgress)
   const startParse = useStore((s) => s.startParse)
   const setMainView = useStore((s) => s.setMainView)
+  const setShowReparse = useStore((s) => s.setShowReparse)
 
   if (!currentDoc) return null
 
@@ -129,6 +130,15 @@ export default function DocHeader(props: Props) {
       )}
       {!isMobile && parsing && (
         <span className="hint" style={{ whiteSpace: 'nowrap' }}>解析中 {parseProgress.toFixed(0)}%</span>
+      )}
+      {!isMobile && hasSegments && !parsing && (
+        // 已解析：弱化的「重新解析」，打开引擎选择浮层（目录不对时的补救入口）
+        <button
+          className="btn-ghost"
+          title="用其他引擎重新解析全文（替换段落与目录）"
+          style={{ fontSize: 12, padding: '3px 8px', color: 'var(--fg-muted)', border: 'none' }}
+          onClick={() => setShowReparse(true)}
+        >重新解析</button>
       )}
 
       {!isMobile && (

@@ -277,6 +277,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "end_offset" not in ann_cols:
         conn.execute("ALTER TABLE annotations ADD COLUMN end_offset INTEGER")
 
+    # 文献解析引擎（local / mineru），重新解析与目录排查用；历史数据为 NULL
+    if "parse_engine" not in cols("documents"):
+        conn.execute("ALTER TABLE documents ADD COLUMN parse_engine TEXT")
+
     # 情报雷达：导入后记录文献 doc_id，看板「打开阅读」直达
     radar_cols = cols("radar_papers")
     if "imported_doc_id" not in radar_cols:

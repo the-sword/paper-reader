@@ -161,6 +161,11 @@ interface State {
   translations: Record<string, { text: string; provider: string }>
   inflight: Set<string>
   aiReady: boolean
+  /** MinerU 是否已配置 MINERU_TOKEN（重新解析菜单据此启用云端选项） */
+  mineruReady: boolean
+  /** 重新解析浮层是否打开（目录页签 / 阅读头部 / ⌘K 共用） */
+  showReparse: boolean
+  setShowReparse: (v: boolean) => void
   parseState: string
   parseProgress: number
   engines: import('../api/client').EngineInfo[]
@@ -242,6 +247,9 @@ export const useStore = create<State>((set, get) => ({
   translations: {},
   inflight: new Set<string>(),
   aiReady: false,
+  mineruReady: false,
+  showReparse: false,
+  setShowReparse: (v) => set({ showReparse: v }),
   parseState: 'idle',   // idle=未解析 | pending/running=进行中 | done | failed
   parseProgress: 0,
   engines: [],
@@ -482,9 +490,9 @@ export const useStore = create<State>((set, get) => ({
       // 有任何可用引擎就认为可以翻译
       const list = await api.getEnginesList()
       const usable = list.engines.filter((e) => e.enabled && e.configured).length
-      set({ aiReady: eng.ai_configured || usable > 0, engines: list.engines })
+      set({ aiReady: eng.ai_configured || usable > 0, engines: list.engines, mineruReady: eng.mineru_configured })
     } catch {
-      set({ aiReady: false })
+      set({ aiReady: false, mineruReady: false })
     }
   },
 
@@ -529,6 +537,9 @@ export const useStore = create<State>((set, get) => ({
     } catch (e) {
       set({ parseState: 'failed', error: String(e) })
     }
+    // 段落 id 已整体替换：刷新标注（段落流标注已迁移/解除锚定）与文档元数据（parse_engine）
+    await get().refreshCurrentDocMeta()
+    if (get().currentDoc?.id === doc.id) await get().refreshAnnotations(doc.id)
   },
 
   pollParse: async (docId) => {

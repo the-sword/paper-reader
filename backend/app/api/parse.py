@@ -18,10 +18,24 @@ _progress: dict[str, dict[str, Any]] = {}
 _lock = threading.Lock()
 
 
+#: 内存中视为「正在解析」的状态；重启后内存清空，不会被残留的 DB 状态永久阻塞
+_BUSY_STATES = ("running", "pending")
+
+
 def _set_progress(doc_id: str, **kw: Any) -> None:
     with _lock:
         _progress.setdefault(doc_id, {})
         _progress[doc_id].update(kw)
+
+
+def _try_claim(doc_id: str) -> bool:
+    """原子地占用解析槽位：已在解析中返回 False。"""
+    with _lock:
+        if (_progress.get(doc_id) or {}).get("state") in _BUSY_STATES:
+            return False
+        _progress.setdefault(doc_id, {})
+        _progress[doc_id].update(state="running", progress=5, error=None)
+        return True
 
 
 class ParseReq(BaseModel):
@@ -71,12 +85,13 @@ def _run_mineru(doc_id: str, task_id: str) -> None:
             state, progress, err = mineru.get_state(task_id)
             _set_progress(doc_id, state=state, progress=progress, error=err)
             if state == "done":
-                n = parser.finalize_mineru(doc_id, task_id)
+                report = parser.finalize_mineru(doc_id, task_id)
                 _set_progress(doc_id, state="done", progress=100,
-                              segments=n, error=None)
+                              segments=report["segments"], remap=report, error=None)
                 return
             if state == "failed":
                 parser.set_parse_status(doc_id, "failed")
+                _set_progress(doc_id, state="failed", error="MinerU 解析失败")
                 return
             time.sleep(3)
         parser.set_parse_status(doc_id, "failed")
@@ -102,22 +117,30 @@ def start_parse(doc_id: str, body: ParseReq, bg: BackgroundTasks) -> dict[str, A
     if engine == "mineru" and not has_token:
         raise HTTPException(400, "未配置 MINERU_TOKEN，请改用 engine=local 或在 .env 填写")
 
+    if not _try_claim(doc_id):
+        raise HTTPException(409, "正在解析中，请等待当前任务完成")
+
     if engine == "local":
-        _set_progress(doc_id, state="running", progress=30, error=None)
         try:
-            n = parser.parse_local_and_save(doc_id, pdf)
+            report = parser.parse_local_and_save(doc_id, pdf)
         except Exception as e:  # noqa: BLE001
             _set_progress(doc_id, state="failed", progress=0, error=str(e))
             raise HTTPException(500, f"本地解析失败：{e}") from e
-        _set_progress(doc_id, state="done", progress=100, segments=n, error=None)
-        return {"engine": "local", "segments": n, "state": "done"}
+        _set_progress(doc_id, state="done", progress=100,
+                      segments=report["segments"], remap=report, error=None)
+        return {"engine": "local", "segments": report["segments"], "remap": report, "state": "done"}
 
-    # MinerU
+    # MinerU：提交失败必须把内存状态置为 failed，否则会阻塞后续解析
     try:
         info = parser.parse_with_mineru(doc_id, pdf)
     except mineru.MinerUError as e:
         parser.set_parse_status(doc_id, "failed")
+        _set_progress(doc_id, state="failed", progress=0, error=str(e))
         raise HTTPException(502, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        parser.set_parse_status(doc_id, "failed")
+        _set_progress(doc_id, state="failed", progress=0, error=str(e))
+        raise HTTPException(500, f"MinerU 提交失败：{e}") from e
 
     _set_progress(doc_id, state="pending", progress=10, error=None, task_id=info["task_id"])
     bg.add_task(_run_mineru, doc_id, info["task_id"])

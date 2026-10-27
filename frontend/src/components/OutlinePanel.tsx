@@ -64,6 +64,9 @@ export default function OutlinePanel({ page, pageCount, fluid = false, onNavigat
   const annotations = useStore((s) => s.annotations)
   const requestJump = useStore((s) => s.requestJump)
   const startParse = useStore((s) => s.startParse)
+  const setShowReparse = useStore((s) => s.setShowReparse)
+  const parseState = useStore((s) => s.parseState)
+  const parseProgress = useStore((s) => s.parseProgress)
   const pagePos = useStore((s) => s.pagePos)
   const [tab, setTab] = useState<'outline' | 'notes'>('outline')
   const jumpTo = (p: number): void => {
@@ -78,6 +81,7 @@ export default function OutlinePanel({ page, pageCount, fluid = false, onNavigat
     [annotations],
   )
   const parsed = segments.length > 0
+  const parsing = parseState === 'running' || parseState === 'pending' || parseState === 'queued'
 
   if (!currentDoc) return null
 
@@ -110,7 +114,11 @@ export default function OutlinePanel({ page, pageCount, fluid = false, onNavigat
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 8px 8px' }}>
         {tab === 'outline' && (
           <>
-            {!parsed && (
+            {parsing && (
+              // 解析中不展示旧目录，避免与即将替换的段落对不上
+              <div className="hint" style={{ padding: '16px 6px' }}>解析中 {parseProgress.toFixed(0)}%</div>
+            )}
+            {!parsing && !parsed && (
               <div className="hint" style={{ padding: '16px 6px', lineHeight: 1.8 }}>
                 解析全文后生成目录
                 <div>
@@ -119,10 +127,16 @@ export default function OutlinePanel({ page, pageCount, fluid = false, onNavigat
                 </div>
               </div>
             )}
-            {parsed && items.length === 0 && (
+            {!parsing && parsed && items.length === 0 && (
               <div className="hint" style={{ padding: '16px 6px' }}>未识别到章节标题</div>
             )}
-            {items.map((it, i) => {
+            {!parsing && parsed && items.length === 0 && (
+              <div style={{ padding: '6px' }}>
+                <button className="btn-ghost" style={{ fontSize: 11, border: 'none', color: 'var(--fg-muted)' }}
+                  onClick={() => setShowReparse(true)}>重新解析</button>
+              </div>
+            )}
+            {parsing ? null : items.map((it, i) => {
               const active = i === current
               const dot = sectionColor(items, i, annotations)
               return (
@@ -149,6 +163,15 @@ export default function OutlinePanel({ page, pageCount, fluid = false, onNavigat
                 </div>
               )
             })}
+            {!parsing && parsed && items.length > 0 && (
+              <div style={{ padding: '10px 8px 4px' }}>
+                <button
+                  className="btn-ghost"
+                  onClick={() => setShowReparse(true)}
+                  style={{ fontSize: 11, border: 'none', padding: 0, color: 'var(--fg-muted)', textDecoration: 'underline' }}
+                >目录不对？重新解析</button>
+              </div>
+            )}
           </>
         )}
 

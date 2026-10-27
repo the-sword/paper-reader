@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -350,7 +351,83 @@ def parse_local(pdf_path: Path) -> list[dict[str, Any]]:
 # 落库
 # ---------------------------------------------------------------------------
 
-def save_segments(doc_id: str, segs: list[dict[str, Any]]) -> int:
+def _remap_annotations(conn: sqlite3.Connection, doc_id: str) -> dict[str, int]:
+    """把段落流标注迁移到重新解析后的新段落（须在同一事务内、新段落插入之后调用）。
+
+    只处理 segment_id 非空且指向已不存在段落的标注；PDF 标注不动。
+    匹配顺序：同页精确 → 全文精确（精确命中时按原标注是否有 offset 重算）
+    → 空白折叠后的包含匹配（offset 置空）→ 都失败则解除段落锚定（segment_id、offset 置空）。
+    返回 {remapped, detached}。
+    """
+    rows = conn.execute(
+        """SELECT id, page, quote, start_offset, end_offset FROM annotations
+           WHERE document_id=? AND segment_id IS NOT NULL
+             AND segment_id NOT IN (SELECT id FROM segments WHERE document_id=?)""",
+        (doc_id, doc_id),
+    ).fetchall()
+    if not rows:
+        return {"remapped": 0, "detached": 0}
+    segs = [
+        dict(r) for r in conn.execute(
+            "SELECT id, page, source FROM segments WHERE document_id=? ORDER BY idx",
+            (doc_id,),
+        ).fetchall()
+    ]
+    remapped = detached = 0
+    for ann in rows:
+        hit = _match_quote(ann["quote"] or "", int(ann["page"] or 1), segs)
+        if hit is None:
+            conn.execute(
+                """UPDATE annotations SET segment_id=NULL, start_offset=NULL, end_offset=NULL
+                   WHERE id=?""",
+                (ann["id"],),
+            )
+            detached += 1
+            continue
+        seg, start, end = hit
+        # 原标注是整段标注（无 offset）时保持整段，不引入新的字符范围
+        keep_range = ann["start_offset"] is not None or ann["end_offset"] is not None
+        conn.execute(
+            """UPDATE annotations SET segment_id=?, page=?, start_offset=?, end_offset=?
+               WHERE id=?""",
+            (seg["id"], seg["page"], start if keep_range else None,
+             end if keep_range else None, ann["id"]),
+        )
+        remapped += 1
+    return {"remapped": remapped, "detached": detached}
+
+
+def _match_quote(
+    quote: str, page: int, segs: list[dict[str, Any]],
+) -> tuple[dict[str, Any], int | None, int | None] | None:
+    """在新段落中定位标注引文，返回 (段落, 起始偏移, 结束偏移)；偏移仅精确命中时给出。"""
+    if not quote.strip():
+        return None
+    ordered = [s for s in segs if s["page"] == page] + [s for s in segs if s["page"] != page]
+    # 先用原始引文精确查找：保留的前导/尾随空白与原 offset 的字符口径一致
+    for seg in ordered:
+        pos = seg["source"].find(quote)
+        if pos >= 0:
+            return seg, pos, pos + len(quote)
+    # 再退回去掉首尾空白的引文（此时偏移对应去空白后的内容）
+    stripped = quote.strip()
+    for seg in ordered:
+        pos = seg["source"].find(stripped)
+        if pos >= 0:
+            return seg, pos, pos + len(stripped)
+    nq = " ".join(quote.split())
+    for seg in ordered:
+        if nq in " ".join(seg["source"].split()):
+            return seg, None, None
+    return None
+
+
+def save_segments_report(doc_id: str, segs: list[dict[str, Any]],
+                         engine: str | None = None) -> dict[str, int]:
+    """整体替换文献段落并记录解析引擎，同一事务内迁移段落流标注。
+
+    返回 {segments, remapped, detached}。段落译文随 segments 删除由外键级联清空。
+    """
     with db() as conn:
         conn.execute("DELETE FROM segments WHERE document_id=?", (doc_id,))
         for s in segs:
@@ -360,10 +437,16 @@ def save_segments(doc_id: str, segs: list[dict[str, Any]]) -> int:
                 (str(uuid.uuid4()), doc_id, s["idx"], s.get("section"),
                  s["kind"], s["source"], s.get("page", 1), s.get("bbox")),
             )
+        report = _remap_annotations(conn, doc_id)
         conn.execute(
-            "UPDATE documents SET parse_status='done' WHERE id=?", (doc_id,)
+            "UPDATE documents SET parse_status='done', parse_engine=COALESCE(?, parse_engine) WHERE id=?",
+            (engine, doc_id),
         )
-    return len(segs)
+    return {"segments": len(segs), **report}
+
+
+def save_segments(doc_id: str, segs: list[dict[str, Any]], engine: str | None = None) -> int:
+    return save_segments_report(doc_id, segs, engine)["segments"]
 
 
 def set_parse_status(doc_id: str, status: str) -> None:
@@ -409,7 +492,7 @@ def parse_with_mineru(doc_id: str, pdf_path: Path) -> dict[str, Any]:
     return {"task_id": task_id}
 
 
-def finalize_mineru(doc_id: str, task_id: str) -> int:
+def finalize_mineru(doc_id: str, task_id: str) -> dict[str, int]:
     """任务完成后拉结果、转 segments、存图片。"""
     result = mineru.fetch_result(task_id)
     segs = _segments_from_content_list(result.content_list)
@@ -427,17 +510,16 @@ def finalize_mineru(doc_id: str, task_id: str) -> int:
     # 存原始 markdown 备查
     (s.parsed_dir / doc_id / "full.md").write_text(result.full_md, encoding="utf-8")
 
-    return save_segments(doc_id, segs)
+    return save_segments_report(doc_id, segs, "mineru")
 
 
-def parse_local_and_save(doc_id: str, pdf_path: Path) -> int:
+def parse_local_and_save(doc_id: str, pdf_path: Path) -> dict[str, int]:
     set_parse_status(doc_id, "running")
     segs = parse_local(pdf_path)
     if not segs:
         set_parse_status(doc_id, "failed")
         raise RuntimeError("本地解析未提取到任何段落（可能是扫描件，需 OCR）")
-    n = save_segments(doc_id, segs)
-    return n
+    return save_segments_report(doc_id, segs, "local")
 
 
 # ---------------------------------------------------------------------------

@@ -26,6 +26,8 @@ export interface DocumentMeta {
   file_size: number | null
   page_count: number | null
   parse_status: string
+  /** 最近一次落库的解析引擎（local / mineru）；历史数据为空 */
+  parse_engine?: string | null
   added_at: string
   opened_at: string | null
   folders: Folder[]
