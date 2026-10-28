@@ -147,8 +147,13 @@ export default function DocHeader(props: Props) {
       )}
 
       {!isMobile && !hasSegments && !parsing && (
-        <button className="btn-ghost" style={{ fontSize: 12, padding: '3px 8px' }} onClick={() => void startParse('auto')}>
-          解析全文
+        <button
+          className="btn-ghost"
+          style={{ fontSize: 12, padding: '3px 8px', color: parseState === 'failed' ? 'var(--warn, #d97706)' : undefined }}
+          title={parseState === 'failed' ? '上次解析未完成，点击重试' : undefined}
+          onClick={() => void startParse('auto')}
+        >
+          {parseState === 'failed' ? '解析失败·重试' : '解析全文'}
         </button>
       )}
       {!isMobile && parsing && (

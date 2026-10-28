@@ -3,7 +3,7 @@
  * 目录优先使用原文 PDF 书签；没有书签时回退到解析产物的 heading 段落。
  * 点击条目或标注即跳到对应页。
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../stores/useStore'
 import type { Annotation, Segment } from '../api/client'
 import { parseStatusText } from '../lib/parseStatus'
@@ -63,6 +63,7 @@ export default function OutlinePanel({ page, pageCount, fluid = false, onNavigat
   const setShowReparse = useStore((s) => s.setShowReparse)
   const parseState = useStore((s) => s.parseState)
   const parseProgress = useStore((s) => s.parseProgress)
+  const syncParseState = useStore((s) => s.syncParseState)
   const pagePos = useStore((s) => s.pagePos)
   const bookmark = usePdfOutline(currentDoc?.id ?? null)
   const [tab, setTab] = useState<'outline' | 'notes'>('outline')
@@ -82,6 +83,14 @@ export default function OutlinePanel({ page, pageCount, fluid = false, onNavigat
   )
   const parsed = segments.length > 0
   const parsing = parseState === 'running' || parseState === 'pending' || parseState === 'queued'
+  const parseFailed = parseState === 'failed'
+
+  // 挂载兜底：解析可能在上次会话已完成（轮询因刷新丢失），同步后目录才会出现
+  useEffect(() => {
+    if (currentDoc && !parsed && !parsing) void syncParseState(currentDoc.id)
+    // 同步动作只依赖文档
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentDoc])
 
   if (!currentDoc) return null
 
@@ -124,12 +133,21 @@ export default function OutlinePanel({ page, pageCount, fluid = false, onNavigat
             {!parsing && items.length === 0 && bookmark.loading && (
               <div className="hint" style={{ padding: '16px 6px' }}>正在读取 PDF 书签…</div>
             )}
-            {!parsing && items.length === 0 && !bookmark.loading && !parsed && (
+            {!parsing && items.length === 0 && !bookmark.loading && !parsed && !parseFailed && (
               <div className="hint" style={{ padding: '16px 6px', lineHeight: 1.8 }}>
                 解析全文后生成目录
                 <div>
                   <button className="btn-primary" style={{ marginTop: 8, fontSize: 12 }}
                     onClick={() => void startParse('auto')}>解析全文</button>
+                </div>
+              </div>
+            )}
+            {!parsing && items.length === 0 && !bookmark.loading && !parsed && parseFailed && (
+              <div className="hint" style={{ padding: '16px 6px', lineHeight: 1.8 }}>
+                上次解析未完成，目录暂不可用。
+                <div>
+                  <button className="btn-primary" style={{ marginTop: 8, fontSize: 12 }}
+                    onClick={() => void startParse('auto')}>重新解析</button>
                 </div>
               </div>
             )}

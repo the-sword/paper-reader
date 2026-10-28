@@ -94,6 +94,7 @@ export default function ChatPanel() {
   const currentDoc = useStore((s) => s.currentDoc)
   const segments = useStore((s) => s.segments)
   const parseState = useStore((s) => s.parseState)
+  const syncParseState = useStore((s) => s.syncParseState)
   const startParse = useStore((s) => s.startParse)
   const requestJump = useStore((s) => s.requestJump)
   const chatQuote = useStore((s) => s.chatQuote)
@@ -108,6 +109,14 @@ export default function ChatPanel() {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const parsed = segments.length > 0
   const parsing = parseState === 'running' || parseState === 'pending' || parseState === 'queued'
+  const parseFailed = parseState === 'failed'
+
+  // 挂载兜底：解析可能在上次会话已完成（轮询因刷新丢失），同步后按钮才会消失
+  useEffect(() => {
+    if (currentDoc && !parsed && !parsing) void syncParseState(currentDoc.id)
+    // parsed/parsing 变化时不必重跑：同步动作只依赖文档
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentDoc])
 
   // 切文档：载入该文档已有的自由问答会话
   useEffect(() => {
@@ -221,13 +230,23 @@ export default function ChatPanel() {
                 >{q}</button>
               ))}
             </div>
-            {!parsed && (
+            {!parsed && !parseFailed && (
               <button
                 className="btn-primary"
                 style={{ marginTop: 14, fontSize: 12 }}
                 disabled={parsing}
                 onClick={() => void startParse('auto')}
               >{parsing ? '解析中…' : '解析全文'}</button>
+            )}
+            {!parsed && parseFailed && (
+              <div style={{ marginTop: 14, fontSize: 11.5, color: 'var(--fg-muted)', lineHeight: 1.7 }}>
+                上次解析未完成，问答暂不可用。
+                <button
+                  className="btn-primary"
+                  style={{ display: 'block', marginTop: 6, fontSize: 12 }}
+                  onClick={() => void startParse('auto')}
+                >重新解析</button>
+              </div>
             )}
           </div>
         ) : (

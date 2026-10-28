@@ -225,6 +225,8 @@ interface State {
 
   // 阅读动作
   loadSegments: (docId: string) => Promise<void>
+  /** 解析状态同步兜底：后端已完成/进行中但前端丢失轮询时自愈（挂载解析入口组件时调用） */
+  syncParseState: (docId: string) => Promise<void>
   startParse: (engine?: 'auto' | 'mineru' | 'local') => Promise<void>
   pollParse: (docId: string) => Promise<void>
   translateQueue: (ids: string[], engine?: string | null) => Promise<void>
@@ -536,6 +538,30 @@ export const useStore = create<State>((set, get) => ({
 
   /** 清空前端已加载的译文（用于重翻） */
   resetTranslations: () => set({ translations: {}, inflight: new Set<string>() }),
+
+  /**
+   * 解析结果同步兜底：轮询可能因页面刷新/断线丢失，导致后端已解析完成
+   * 而界面仍停在「未解析」（各处「解析全文」按钮不消失）。
+   * 在挂载解析入口的组件里调用：后端 parse_status=done 且本地无段落时
+   * 重拉一次 segments；后端在解析中则恢复轮询。
+   */
+  syncParseState: async (docId: string) => {
+    if (get().segments.length > 0) return
+    const st = get().parseState
+    if (st === 'running' || st === 'pending' || st === 'queued') return
+    try {
+      const doc = get().currentDoc?.id === docId
+        ? get().currentDoc
+        : await api.getDocument(docId).catch(() => null)
+      if (!doc) return
+      if (doc.parse_status === 'done') {
+        await get().loadSegments(docId)
+      } else if (doc.parse_status === 'running' || doc.parse_status === 'pending') {
+        set({ parseState: doc.parse_status, parseProgress: 10 })
+        void get().pollParse(docId)
+      }
+    } catch { /* 忽略：下次挂载再试 */ }
+  },
 
   /**
    * 只刷新当前文档的元数据（标签、文件夹等），不重载段落与译文。
