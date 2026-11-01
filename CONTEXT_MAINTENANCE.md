@@ -9,6 +9,15 @@
 - **入口**：后端托管 `frontend/dist`，本地 `http://127.0.0.1:8787`。
 - **构建**：`cd frontend && npm run build`（`tsc -b && vite build`）。
 
+## 2026-11 UI 治理（一次清理，后续开发遵循）
+
+- **ReadingView.tsx 已删除**（1110 行死代码，旧段落流阅读器）。翻译引擎切换 UI 移入 SettingsDialog「翻译引擎」页「当前使用」选择器；`selected_engine` 偏好改由 App 启动时加载。
+- **通知只有一套**：`stores/useToast.ts`（`toast.error/notice/success`，可带动作）+ `components/Toasts.tsx`（App 根部挂一次）。useStore 不再有 `error`/`notice`/`noticeAction`/`clearError` 字段——**不要再往 store 里加通知状态**。面板内联错误用 `ChatThread.tsx` 导出的 `InlineError`。
+- **会话线程只有一套**：领读教练（SummaryPanel）与自由问答（ChatPanel）共用 `components/ChatThread.tsx`（ChatThread 气泡线程 + ChatInput 统一 Enter 发送 + 引用块三件套）。新聊天类功能从这里长，不要另起炉灶。
+- **状态色 token**：`global.css` `:root` 里 `--ok/--ok-strong/--ok-bg/--ok-soft`、`--err/--err-bright/--err-bg/--err-solid`、`--warn`、`--chip-ok-*/--chip-warn-*`。组件内联样式不要写散装状态 hex。
+- **轮询必须带文档守卫**：`pollParse`/`translateQueue` 在每次 set 前检查 `currentDoc?.id === docId`，切走即停/丢弃，防跨文档污染（解析完成后由 `syncParseState` 自愈）。
+- **本地导出**（`services/export.py` + 设置「导出」页）：8 类目可选的 tar.gz，与备份同构；全选 = 可恢复完整备份，部分导出带 `EXPORT_INFO.json complete:false`，`backup.validate_restore_blob` 在任何破坏前拒绝恢复。导出侧密钥剔除比备份多一个 `github.token`。产物留 `backups/`（毫秒级文件名防同秒覆盖）。
+
 ## 关键设计决策
 
 - **双语 PDF**：保留 BabelDOC 宽页（1224×792）不切页；译文视图 = 前端裁右半（`PdfViewer halfView="zh"`）。

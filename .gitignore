@@ -47,3 +47,4 @@ uploads/
 # ---------- 编辑器 ----------
 .vscode/
 .idea/
+.zcode/
