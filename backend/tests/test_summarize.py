@@ -68,9 +68,10 @@ def test_generate_socratic_card_stores_summary(parsed_doc, monkeypatch):
     """领读类型走通用生成链路：语料构建 → AI 调用 → summaries 入库。"""
     called = {}
 
-    def fake_call(system, user, cancel_event=None, on_progress=None):
-        called["system"] = system
-        called["user"] = user
+    def fake_call(messages, cancel_event=None, on_progress=None):
+        # _call_ai 收 OpenAI 风格 messages 数组，此处抽出 system/user 供断言
+        called["system"] = next(m["content"] for m in messages if m["role"] == "system")
+        called["user"] = next(m["content"] for m in messages if m["role"] == "user")
         return {"content": "## 一句话问题\n occupancy 融合。", "model": "test-m"}
 
     monkeypatch.setattr(summarize, "_call_ai", fake_call)
