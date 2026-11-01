@@ -80,6 +80,19 @@ export interface RemapReport {
   remapped: number
   detached: number
 }
+/** 文献级合并导入报告 */
+export interface MergeImportReport {
+  ok: boolean
+  documents: { total: number; by_hash: number; by_identity: number; placeholder: number }
+  annotations: { imported: number; skipped_existing: number }
+  summaries: { imported: number; skipped_existing: number }
+  sessions: { imported: number; skipped_existing?: number }
+  folders_created: number
+  tags_created: number
+  reanchor: { docs: number; reanchored: number; kept: number }
+  pdfs_attached_from_archive: number
+  details: string[]
+}
 export interface ParseProgress {
   state: string
   progress: number
@@ -486,6 +499,21 @@ export const api = {
     if (password) fd.append('password', password)
     return req<{ ok: boolean; restored_files: number; message: string }>(
       '/reading/backup/restore/file', { method: 'POST', body: fd })
+  },
+  /** 从备份/导出文件只合并设置（库的其余数据不动，立即生效） */
+  mergeSettingsFromFile: (file: File, password?: string) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    if (password) fd.append('password', password)
+    return req<{ ok: boolean; imported: number; skipped_secret: number; message: string }>(
+      '/reading/backup/restore/settings', { method: 'POST', body: fd })
+  },
+  /** 文献级合并导入：标注/AI 按论文身份挂接（hash → arXiv/DOI → 占位） */
+  mergeImportFromFile: (file: File, password?: string) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    if (password) fd.append('password', password)
+    return req<MergeImportReport>('/reading/backup/restore/merge', { method: 'POST', body: fd })
   },
 
   // ---- 本地导出（可选类目）----

@@ -920,6 +920,48 @@ function BackupTab() {
     } catch (e) { setMsg(`❌ ${String(e).replace(/^Error:\s*/, '')}`) } finally { setBusy(null) }
   }
 
+  const settingsFileRef = useRef<HTMLInputElement>(null)
+  /** 只合并设置：不动库的其他数据、无需重启；同名键被文件值覆盖 */
+  const importSettings = async (f: File) => {
+    if (!confirm(`从「${f.name}」导入设置？同名设置会被覆盖（界面偏好/术语表/雷达配置等），文献与标注不受影响。`)) return
+    setBusy('importsettings'); setMsg('')
+    try {
+      const r = await api.mergeSettingsFromFile(f, restorePw || undefined)
+      setMsg(`✅ ${r.message}`)
+    } catch (e) { setMsg(`❌ ${String(e).replace(/^Error:\s*/, '')}`) } finally { setBusy(null) }
+  }
+
+  const mergeFileRef = useRef<HTMLInputElement>(null)
+  /** 文献级合并导入：标注/AI 按论文身份挂接，不动库的其他数据 */
+  const mergeImport = async (f: File) => {
+    setBusy('mergeimport'); setMsg('')
+    try {
+      const r = await api.mergeImportFromFile(f, restorePw || undefined)
+      const d = r.documents
+      const lines = [
+        `✅ 合并导入：${d.total} 篇（同文件 ${d.by_hash} · 同论文重锚 ${d.by_identity} · 占位 ${d.placeholder}）`,
+        `标注 ${r.annotations.imported} 条（跳过已有 ${r.annotations.skipped_existing}）`
+        + ` · 总结 ${r.summaries.imported} · 会话 ${r.sessions.imported}`
+        + ` · 新建文件夹 ${r.folders_created}/标签 ${r.tags_created}`,
+      ]
+      if (r.reanchor.docs > 0) {
+        lines.push(`重锚：${r.reanchor.reanchored} 条成功，${r.reanchor.kept} 条保留原坐标`)
+      }
+      if (r.pdfs_attached_from_archive > 0) {
+        lines.push(`归档自带 PDF ${r.pdfs_attached_from_archive} 份已就位`)
+      }
+      if (d.placeholder > 0) {
+        lines.push('占位文献可稍后单独上传 PDF，上传后标注自动点亮')
+      }
+      setMsg(lines.join('\n'))
+      // 书库列表立即出现新文献/占位
+      void useStore.getState().refreshLibrary()
+      void useStore.getState().refreshSidebar()
+    } catch (e) {
+      setMsg(`❌ ${String(e).replace(/^Error:\s*/, '')}`)
+    } finally { setBusy(null) }
+  }
+
   return (
     <div>
       <p style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 0, lineHeight: 1.6 }}>
@@ -1024,6 +1066,48 @@ function BackupTab() {
         <button className="btn-ghost" style={{ fontSize: 12 }} disabled={!!busy} onClick={() => fileRef.current?.click()}>
           {busy === 'restorefile' ? '导入中…' : '从文件导入…'}
         </button>
+        {/* 只合并设置：部分导出（如仅设置）的安全出路，不动库的其他数据 */}
+        <input
+          ref={settingsFileRef}
+          type="file"
+          accept=".gz,.tgz,.enc,.tar.gz"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            e.target.value = ''
+            if (f) void importSettings(f)
+          }}
+        />
+        <button
+          className="btn-ghost"
+          style={{ fontSize: 12 }}
+          disabled={!!busy}
+          title="只导入界面偏好/术语表/雷达配置等设置，文献与标注不受影响，无需重启"
+          onClick={() => settingsFileRef.current?.click()}
+        >
+          {busy === 'importsettings' ? '导入中…' : '仅导入设置…'}
+        </button>
+        {/* 文献级合并：标注/AI 按论文身份挂接（hash → arXiv/DOI → 占位） */}
+        <input
+          ref={mergeFileRef}
+          type="file"
+          accept=".gz,.tgz,.enc,.tar.gz"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            e.target.value = ''
+            if (f) void mergeImport(f)
+          }}
+        />
+        <button
+          className="btn-ghost"
+          style={{ fontSize: 12 }}
+          disabled={!!busy}
+          title="把导出文件里的文献/标注/总结合并进当前库：同一文件直接挂接，同论文不同版式自动重锚，未知论文建占位（PDF 可后补）"
+          onClick={() => mergeFileRef.current?.click()}
+        >
+          {busy === 'mergeimport' ? '合并中…' : '合并导入…'}
+        </button>
       </div>
 
       {remote && (
@@ -1074,9 +1158,7 @@ function fmtBytes(n?: number): string {
  */
 function ExportTab() {
   const [meta, setMeta] = useState<Array<{ key: string; label: string; count: number; bytes?: number }>>([])
-  const [selected, setSelected] = useState<Set<string>>(
-    new Set(['settings', 'library', 'annotations', 'ai']),
-  )
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [exports, setExports] = useState<Array<{
@@ -1088,7 +1170,12 @@ function ExportTab() {
   }
 
   useEffect(() => {
-    void api.exportMeta().then((r) => setMeta(r.categories)).catch(() => {})
+    void api.exportMeta().then((r) => {
+      setMeta(r.categories)
+      // 默认全选：导出最常见的目的是迁移/恢复，默认部分类目会产出
+      // 不可恢复的文件（恢复安全闸会拒绝），用户极易踩坑
+      setSelected(new Set(r.categories.map((c) => c.key)))
+    }).catch(() => {})
     loadList()
   }, [])
 
@@ -1138,7 +1225,12 @@ function ExportTab() {
       document.body.appendChild(a)
       a.click()
       a.remove()
-      toast.success(`已导出 ${r.size_mb} MB · ${r.file_count} 个文件${r.encrypted ? '（已加密）' : ''}`)
+      // 完整/部分导出的可恢复性完全不同，提示语必须区分开
+      if (r.complete) {
+        toast.success(`已导出 ${r.size_mb} MB · ${r.file_count} 个文件${r.encrypted ? '（已加密）' : ''}，可用于恢复`)
+      } else {
+        toast.notice(`已导出 ${r.size_mb} MB（部分类目）——仅供留存，不能用于恢复`)
+      }
       loadList()
     } catch (e) {
       toast.error(String(e).replace(/^Error:\s*/, ''))
@@ -1264,7 +1356,8 @@ function ExportTab() {
 
       <p style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 14, lineHeight: 1.7 }}>
         · 全部类目的导出 = 完整备份：可在「备份 → 从文件导入…」直接恢复，或上传 WebDAV 后从远端恢复。
-        <br />· 部分导出仅供留存与检视，恢复时会被拒绝（防止清掉未包含的数据）。
+        <br />· 部分导出仅供留存与检视，整体恢复会被拒绝（防止清掉未包含的数据）；
+        其中的「设置」类目可用「备份 → 仅导入设置…」合并到现有库。
         <br />· 导出会自动剔除密钥（AI Key、翻译引擎密钥、WebDAV 密码、GitHub Token）。
       </p>
     </div>

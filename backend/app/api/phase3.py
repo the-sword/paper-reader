@@ -254,27 +254,37 @@ def restore_backup(body: RestoreReq | None = None) -> dict[str, Any]:
 RESTORE_FILE_MAX_BYTES = 4 * 1024 * 1024 * 1024
 
 
+async def _save_upload(file: UploadFile, prefix: str) -> "Path":
+    """把上传文件流式落到临时路径（1MB 分块）。临时名自生成：
+    上传的 filename 不可信，不拼进路径。调用方负责删除。"""
+    import time
+    from pathlib import Path
+
+    tmp = Path(tempfile.gettempdir()) / f"{prefix}-{time.time_ns()}"
+    size = 0
+    with open(tmp, "wb") as out:
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > RESTORE_FILE_MAX_BYTES:
+                tmp.unlink(missing_ok=True)
+                raise HTTPException(400, "文件超过 4GB")
+            out.write(chunk)
+    if size == 0:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(400, "上传的文件为空")
+    return tmp
+
+
 @router.post("/backup/restore/file")
 async def restore_from_file(
     file: UploadFile = File(...),
     password: str | None = Form(None),
 ) -> dict[str, Any]:
     """从本地上传的备份/完整导出文件恢复（流式落盘，避免整读进内存）。"""
-    import time
     from pathlib import Path
 
-    # 临时文件名自生成：上传的 filename 不可信，不拼进路径
-    tmp = Path(tempfile.gettempdir()) / f"pr-restore-upload-{time.time_ns()}"
-    size = 0
+    tmp: Path = await _save_upload(file, "pr-restore-upload")  # type: ignore[annotation]
     try:
-        with open(tmp, "wb") as out:
-            while chunk := await file.read(1024 * 1024):
-                size += len(chunk)
-                if size > RESTORE_FILE_MAX_BYTES:
-                    raise HTTPException(400, "文件超过 4GB")
-                out.write(chunk)
-        if size == 0:
-            raise HTTPException(400, "上传的文件为空")
         try:
             return backup_svc.restore_from_file(tmp, password)
         except HTTPException:
@@ -282,6 +292,60 @@ async def restore_from_file(
         except Exception as e:  # noqa: BLE001
             logger.exception("文件恢复失败")
             raise HTTPException(502, f"恢复失败：{e}") from e
+    finally:
+        tmp.unlink(missing_ok=True)
+        await file.close()
+
+
+@router.post("/backup/restore/settings")
+async def restore_settings_from_file(
+    file: UploadFile = File(...),
+    password: str | None = Form(None),
+) -> dict[str, Any]:
+    """从备份/导出文件**只合并设置**：库的其余数据不动、无需重启。
+
+    部分导出整体恢复会被安全闸拒绝，但设置是纯 key-value 无外键，
+    可以安全合并——给「只导出设置」类文件一个可导入的出路。
+    """
+    from pathlib import Path
+
+    tmp: Path = await _save_upload(file, "pr-settings-upload")  # type: ignore[annotation]
+    try:
+        try:
+            return export_svc.merge_settings_from_file(tmp, password)
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.exception("设置合并失败")
+            raise HTTPException(502, f"导入设置失败：{e}") from e
+    finally:
+        tmp.unlink(missing_ok=True)
+        await file.close()
+
+
+@router.post("/backup/restore/merge")
+async def merge_import(
+    file: UploadFile = File(...),
+    password: str | None = Form(None),
+) -> dict[str, Any]:
+    """文献级合并导入：标注/AI 数据按论文身份挂接，不动库的其他数据。
+
+    匹配链 file_hash → arXiv/DOI → 占位文献；身份匹配的标注自动重锚。
+    返回导入报告（命中方式/数量/重锚/占位明细）。
+    """
+    from pathlib import Path
+
+    from ..services import merge as merge_svc
+
+    tmp: Path = await _save_upload(file, "pr-merge-upload")  # type: ignore[annotation]
+    try:
+        try:
+            return merge_svc.merge_from_file(tmp, password)
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.exception("合并导入失败")
+            raise HTTPException(502, f"合并导入失败：{e}") from e
     finally:
         tmp.unlink(missing_ok=True)
         await file.close()
