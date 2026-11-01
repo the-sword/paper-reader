@@ -47,7 +47,10 @@ def clean_db():
         for t in ("radar_papers", "radar_fts", "radar_repos", "radar_topics",
                   "radar_repo_items", "github_stars",
                   "digest_history", "digest_items", "documents", "segments",
-                  "summaries", "settings"):
+                  "summaries", "settings",
+                  "annotations", "translations", "term_cache",
+                  "reader_sessions", "reader_messages",
+                  "folders", "document_folders", "tags", "document_tags"):
             conn.execute(f"DELETE FROM {t}")
     yield
 

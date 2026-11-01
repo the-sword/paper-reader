@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from ..services import backup as backup_svc
 from ..services import babeldoc as babeldoc_svc
+from ..services import export as export_svc
 from ..services import toqueue as queue_svc
 from ..services import jobs as jobs_svc
 from ..services import glossary_cache as term_svc
@@ -246,6 +247,62 @@ def restore_backup(body: RestoreReq | None = None) -> dict[str, Any]:
         return backup_svc.restore(password=body.password if body else None)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, str(e)) from e
+
+
+# ---------------------------------------------------------------------------
+# 本地导出（可选类目）
+# ---------------------------------------------------------------------------
+
+class ExportReq(BaseModel):
+    categories: list[str]
+    password: str | None = None   # 非空则加密归档
+
+
+@router.get("/export/meta")
+def export_meta() -> dict[str, Any]:
+    """各类目条数/体积，供前端勾选界面展示。"""
+    return export_svc.export_meta()
+
+
+@router.post("/export/run")
+def run_export(body: ExportReq) -> dict[str, Any]:
+    """按勾选类目打包到 backups/ 并返回摘要（前端再拉下载链接）。"""
+    if not body.categories:
+        raise HTTPException(400, "请至少选择一个类目")
+    try:
+        return export_svc.build_export(body.categories, body.password)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("导出失败")
+        raise HTTPException(502, f"导出失败：{e}") from e
+
+
+@router.get("/export/list")
+def list_exports() -> dict[str, Any]:
+    return export_svc.list_exports()
+
+
+@router.get("/export/{name}/download")
+def download_export(name: str) -> Any:
+    try:
+        p = export_svc.export_path(name)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e)) from e
+    from fastapi.responses import FileResponse
+
+    return FileResponse(p, media_type="application/gzip", filename=name)
+
+
+@router.delete("/export/{name}")
+def delete_export(name: str) -> dict[str, Any]:
+    try:
+        export_svc.delete_export(name)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e)) from e
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

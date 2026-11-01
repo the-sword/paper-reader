@@ -4,6 +4,7 @@ import {
   type AIConfig, type EngineInfo, type EngineTestResult,
 } from '../api/client'
 import { useStore } from '../stores/useStore'
+import { toast } from '../stores/useToast'
 import RadarTopicsEditor from './RadarTopicsEditor'
 
 const AI_PRESETS = [
@@ -12,7 +13,7 @@ const AI_PRESETS = [
   { label: '阿里百炼', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
 ]
 
-type Tab = 'ai' | 'engines' | 'glossary' | 'bilingual' | 'mineru' | 'radar' | 'backup' | 'system'
+type Tab = 'ai' | 'engines' | 'glossary' | 'bilingual' | 'mineru' | 'radar' | 'backup' | 'export' | 'system'
 
 export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>('engines')
@@ -25,6 +26,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
     ['mineru', 'MinerU'],
     ['radar', '🛰 雷达'],
     ['backup', '备份'],
+    ['export', '导出'],
     ['system', '系统信息'],
   ]
 
@@ -74,6 +76,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           {tab === 'mineru' && <MinerUTab />}
           {tab === 'radar' && <RadarTopicsEditor />}
           {tab === 'backup' && <BackupTab />}
+          {tab === 'export' && <ExportTab />}
           {tab === 'system' && <SystemTab />}
         </div>
       </div>
@@ -97,12 +100,20 @@ function EnginesTab() {
   const [engines, setEngines] = useState<EngineInfo[]>([])
   const [tests, setTests] = useState<Record<string, EngineTestResult | 'running'>>({})
   const [editing, setEditing] = useState<string | null>(null)
+  const selectedEngine = useStore((s) => s.selectedEngine)
+  const setSelectedEngine = useStore((s) => s.setSelectedEngine)
   const refreshAIConfig = useStore((s) => s.refreshAIConfig)
 
   const load = () => {
     void api.getEnginesList().then((r) => setEngines(r.engines)).catch(() => {})
   }
   useEffect(load, [])
+
+  /** 切换当前使用的引擎：写 store（划词/段落翻译立即生效）并持久化 */
+  const pick = (name: string | null) => {
+    setSelectedEngine(name)
+    void api.savePrefs({ selected_engine: name ?? '' }).catch(() => {})
+  }
 
   const runTest = async (name: string) => {
     setTests((t) => ({ ...t, [name]: 'running' }))
@@ -135,6 +146,23 @@ function EnginesTab() {
         按顺序尝试，前一个失败自动降级到下一个。已启用且已配置的引擎才会参与。
       </p>
 
+      <div style={{ ...boxStyle, display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, flexShrink: 0 }}>当前使用</div>
+        <select
+          value={selectedEngine ?? ''}
+          onChange={(e) => pick(e.target.value || null)}
+          style={{ flex: 1, maxWidth: 260 }}
+        >
+          <option value="">自动（按优先级降级）</option>
+          {engines.filter((e) => e.enabled && e.configured).map((e) => (
+            <option key={e.name} value={e.name}>{e.label}</option>
+          ))}
+        </select>
+        <div style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+          划词与段落翻译立即生效
+        </div>
+      </div>
+
       {engines.map((e, i) => {
         const t = tests[e.name]
         return (
@@ -153,8 +181,8 @@ function EnginesTab() {
 
               <span style={{
                 fontSize: 10, padding: '1px 6px', borderRadius: 8,
-                background: e.configured ? '#22c55e22' : '#9ca3af22',
-                color: e.configured ? '#16a34a' : 'var(--fg-muted)',
+                background: e.configured ? 'var(--ok-soft)' : '#9ca3af22',
+                color: e.configured ? 'var(--ok)' : 'var(--fg-muted)',
               }}>{e.configured ? '已配置' : '未配置'}</span>
 
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
@@ -183,8 +211,8 @@ function EnginesTab() {
             {t && t !== 'running' && (
               <div style={{
                 margin: '8px 0 0 40px', fontSize: 12, padding: '6px 9px', borderRadius: 6,
-                background: t.ok ? '#22c55e1a' : '#ef44441a',
-                color: t.ok ? '#15803d' : '#b91c1c',
+                background: t.ok ? 'var(--ok-bg)' : 'var(--err-bg)',
+                color: t.ok ? 'var(--ok-strong)' : 'var(--err)',
               }}>
                 {t.ok
                   ? `✅ ${t.latency_ms}ms · ${t.text}`
@@ -464,8 +492,8 @@ function AITab({ onSaved }: { onSaved: () => void }) {
       {testRes && (
         <div style={{
           marginTop: 10, fontSize: 12, padding: '7px 10px', borderRadius: 6,
-          background: testRes.ok ? '#22c55e1a' : '#ef44441a',
-          color: testRes.ok ? '#15803d' : '#b91c1c',
+          background: testRes.ok ? 'var(--ok-bg)' : 'var(--err-bg)',
+          color: testRes.ok ? 'var(--ok-strong)' : 'var(--err)',
         }}>
           {testRes.ok ? `✅ ${testRes.latency_ms}ms · ${testRes.text}` : `❌ ${testRes.error}`}
         </div>
@@ -590,8 +618,8 @@ function BilingualTab() {
             {enabled !== null && (
               <span style={{
                 marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8,
-                background: enabled ? '#22c55e22' : '#9ca3af22',
-                color: enabled ? '#16a34a' : 'var(--fg-muted)', fontWeight: 400,
+                background: enabled ? 'var(--ok-soft)' : '#9ca3af22',
+                color: enabled ? 'var(--ok)' : 'var(--fg-muted)', fontWeight: 400,
               }}>{enabled ? '已开启' : '已关闭'}</span>
             )}
           </div>
@@ -638,7 +666,7 @@ function MinerUTab() {
         <div style={{ fontSize: 12 }}>
           <strong>当前状态：</strong>
           {status ? (status.configured
-            ? <span style={{ color: '#16a34a' }}>已配置（模型 {status.model}）</span>
+            ? <span style={{ color: 'var(--ok)' }}>已配置（模型 {status.model}）</span>
             : <span style={{ color: 'var(--fg-muted)' }}>未配置，将使用本地解析兜底</span>)
             : '加载中…'}
         </div>
@@ -722,7 +750,7 @@ function PerfCheck() {
   }
 
   const levelColor = (l: string) =>
-    l === 'excellent' ? '#16a34a' : l === 'good' ? '#65a30d'
+    l === 'excellent' ? 'var(--ok)' : l === 'good' ? '#65a30d'
     : l === 'fair' ? '#d97706' : l === 'slow' ? '#dc2626' : 'var(--fg-muted)'
 
   return (
@@ -742,7 +770,7 @@ function PerfCheck() {
           部署到 VPS 后跑一次就知道够不够用。约需 5-15 秒。
         </div>
       )}
-      {err && <div style={{ fontSize: 11, color: '#b91c1c' }}>{err}</div>}
+      {err && <div style={{ fontSize: 11, color: 'var(--err)' }}>{err}</div>}
 
       {res && (
         <>
@@ -792,7 +820,7 @@ function PerfCheck() {
                 display: 'flex', gap: 6, fontSize: 11,
                 padding: '4px 0', alignItems: 'flex-start',
               }}>
-                <span style={{ color: f.ok ? '#16a34a' : '#dc2626', flexShrink: 0 }}>
+                <span style={{ color: f.ok ? 'var(--ok)' : 'var(--err-bright)', flexShrink: 0 }}>
                   {f.ok ? '✓' : '✗'}
                 </span>
                 <span style={{ flexShrink: 0, width: 130 }}>{f.name}</span>
@@ -948,7 +976,7 @@ function BackupTab() {
           />
         </div>
         {backupPw && (
-          <div style={{ marginTop: 6, color: '#b45309' }}>
+          <div style={{ marginTop: 6, color: 'var(--warn)' }}>
             ⚠️ 口令不会保存在任何地方，请自行牢记；丢失将无法恢复加密备份。
           </div>
         )}
@@ -984,8 +1012,8 @@ function BackupTab() {
       {msg && (
         <div style={{
           marginTop: 12, fontSize: 12, padding: '7px 10px', borderRadius: 6,
-          background: msg.startsWith('✅') ? '#22c55e1a' : msg.startsWith('❌') ? '#ef44441a' : 'var(--bg-side)',
-          color: msg.startsWith('❌') ? '#b91c1c' : 'var(--fg)',
+          background: msg.startsWith('✅') ? 'var(--ok-bg)' : msg.startsWith('❌') ? 'var(--err-bg)' : 'var(--bg-side)',
+          color: msg.startsWith('❌') ? 'var(--err)' : 'var(--fg)',
           lineHeight: 1.6, wordBreak: 'break-word',
         }}>{msg}</div>
       )}
@@ -996,6 +1024,223 @@ function BackupTab() {
         <br />恢复操作会先把当前数据库另存为
         <code style={{ fontSize: 10 }}> library.db.before-restore-时间戳 </code>
         再覆盖。
+      </p>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+
+/** 勾选这些类目时强制带上「文献库元数据」（后端同样强制） */
+const LIBRARY_DEPS = ['annotations', 'ai', 'translations', 'parsed', 'pdfs']
+
+function fmtBytes(n?: number): string {
+  if (!n) return ''
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`
+  if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`
+  return `${n} B`
+}
+
+/**
+ * 「导出」页：按类目勾选打包成 tar.gz 下载到本地（与备份同构）。
+ * 全部勾选 = 可直接用于恢复的完整备份；部分导出仅供留存（恢复会被拒绝）。
+ * 产物同时留在服务端 backups/ 目录，历史列表可再次下载或删除。
+ */
+function ExportTab() {
+  const [meta, setMeta] = useState<Array<{ key: string; label: string; count: number; bytes?: number }>>([])
+  const [selected, setSelected] = useState<Set<string>>(
+    new Set(['settings', 'library', 'annotations', 'ai']),
+  )
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [exports, setExports] = useState<Array<{
+    file_name: string; size_mb: number; created_at: string; encrypted: boolean
+  }>>([])
+
+  const loadList = () => {
+    void api.listExports().then((r) => setExports(r.exports)).catch(() => {})
+  }
+
+  useEffect(() => {
+    void api.exportMeta().then((r) => setMeta(r.categories)).catch(() => {})
+    loadList()
+  }, [])
+
+  /** 有依赖项时 library 强制勾选（与后端 normalize_categories 一致） */
+  const depActive = LIBRARY_DEPS.some((k) => selected.has(k))
+  const effective = (): Set<string> => {
+    const s = new Set(selected)
+    if (depActive) s.add('library')
+    return s
+  }
+  const eff = effective()
+  const allOn = meta.length > 0 && meta.every((c) => eff.has(c.key))
+
+  const toggle = (key: string) => {
+    setSelected((prev) => {
+      const s = new Set(prev)
+      if (s.has(key)) {
+        if (key === 'library' && LIBRARY_DEPS.some((k) => s.has(k))) {
+          toast.notice('文献库元数据会随所选类目自动包含')
+          return prev
+        }
+        s.delete(key)
+      } else {
+        s.add(key)
+      }
+      return s
+    })
+  }
+
+  const selectAll = () => {
+    setSelected(allOn ? new Set() : new Set(meta.map((c) => c.key)))
+  }
+
+  const run = async () => {
+    const cats = [...effective()]
+    if (!cats.length) {
+      toast.notice('请至少选择一个类目')
+      return
+    }
+    setBusy(true)
+    try {
+      const r = await api.runExport(cats, password || undefined)
+      // 触发浏览器下载（产物同时留在服务端 backups/，历史列表可再取）
+      const a = document.createElement('a')
+      a.href = api.exportDownloadUrl(r.file_name)
+      a.download = r.file_name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      toast.success(`已导出 ${r.size_mb} MB · ${r.file_count} 个文件${r.encrypted ? '（已加密）' : ''}`)
+      loadList()
+    } catch (e) {
+      toast.error(String(e).replace(/^Error:\s*/, ''))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const del = async (name: string) => {
+    if (!confirm(`删除导出文件 ${name}？`)) return
+    try {
+      await api.deleteExport(name)
+      loadList()
+    } catch (e) {
+      toast.error(String(e).replace(/^Error:\s*/, ''))
+    }
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 0, lineHeight: 1.6 }}>
+        勾选类目打包为 tar.gz 下载（与备份同格式）。文件同时保留在服务端
+        <code style={{ fontSize: 10 }}> backups/ </code>目录，可从下方列表再次下载。
+      </p>
+
+      {/* 类目列表 */}
+      <div style={boxStyle}>
+        {meta.length === 0 && <div style={{ fontSize: 12 }}>加载中…</div>}
+        {meta.map((c) => {
+          const on = eff.has(c.key)
+          const locked = c.key === 'library' && depActive
+          return (
+            <label
+              key={c.key}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '5px 0', cursor: 'pointer', fontSize: 13,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={on}
+                disabled={locked}
+                style={{ width: 'auto', margin: 0 }}
+                onChange={() => toggle(c.key)}
+              />
+              <span>{c.label}</span>
+              <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--fg-muted)' }}>
+                {c.key === 'library' && locked
+                  ? '已随所选项自动包含'
+                  : `${c.count} 条${c.bytes ? ` · ${fmtBytes(c.bytes)}` : ''}`}
+              </span>
+            </label>
+          )
+        })}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+          <button className="btn-ghost" style={{ fontSize: 11 }} onClick={selectAll}>
+            {allOn ? '全不选' : '全选'}
+          </button>
+          {allOn && (
+            <span style={{ fontSize: 11, color: 'var(--ok)' }}>
+              ✓ 全部类目：此导出与完整备份等价，可直接用于恢复
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* 可选加密 + 执行 */}
+      <div style={{ ...boxStyle, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="加密口令（留空则不加密）"
+          style={{ flex: 1, fontSize: 12, padding: '6px 9px' }}
+        />
+        <button className="btn-primary" style={{ fontSize: 12 }} disabled={busy} onClick={() => void run()}>
+          {busy ? '打包中…' : '导出并下载'}
+        </button>
+      </div>
+      {password && (
+        <div style={{ fontSize: 11, color: 'var(--warn)', marginBottom: 10, lineHeight: 1.6 }}>
+          ⚠️ 口令不落库、不记录；忘记口令将无法打开加密导出。
+        </div>
+      )}
+
+      {/* 历史导出 */}
+      {exports.length > 0 && (
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 6 }}>
+            历史导出（服务端 backups/ 目录，{exports.length}）
+          </div>
+          {exports.map((x) => (
+            <div
+              key={x.file_name}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5,
+                padding: '5px 0', borderBottom: '1px solid var(--border)',
+              }}
+            >
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden',
+                textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.file_name}>
+                {x.file_name}
+              </span>
+              <span style={{ color: 'var(--fg-muted)', flexShrink: 0 }}>
+                {x.size_mb} MB{x.encrypted ? ' · 🔒' : ''}
+              </span>
+              <a
+                className="btn-ghost"
+                style={{ fontSize: 11, padding: '2px 8px', flexShrink: 0 }}
+                href={api.exportDownloadUrl(x.file_name)}
+                download={x.file_name}
+              >下载</a>
+              <button
+                className="btn-ghost"
+                style={{ fontSize: 11, padding: '2px 8px', color: 'var(--err)', flexShrink: 0 }}
+                onClick={() => void del(x.file_name)}
+              >删除</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 14, lineHeight: 1.7 }}>
+        · 全部类目的导出 = 完整备份：上传 WebDAV 后可用「备份 → 从远端恢复」。
+        <br />· 部分导出仅供留存与检视，恢复时会被拒绝（防止清掉未包含的数据）。
+        <br />· 导出会自动剔除密钥（AI Key、翻译引擎密钥、WebDAV 密码、GitHub Token）。
       </p>
     </div>
   )

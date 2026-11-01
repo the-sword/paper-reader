@@ -29,6 +29,9 @@ from ..core.http import make_client
 
 MANIFEST_NAME = "BACKUP_INFO.json"
 
+#: 导出归档的清单名（services/export.py 产出）。恢复时用它识别部分导出。
+EXPORT_MANIFEST_NAME = "EXPORT_INFO.json"
+
 # 归档加密后的文件扩展名
 ENCRYPTED_SUFFIX = ".enc"
 
@@ -307,6 +310,34 @@ def list_remote() -> dict[str, Any]:
 # 恢复
 # ---------------------------------------------------------------------------
 
+def validate_restore_blob(payload: bytes) -> None:
+    """恢复前的安全闸：拒绝「部分导出」的归档。
+
+    services/export.py 产出的可选类目导出带 EXPORT_INFO.json 清单；
+    complete=false 意味着未选类目的表是空的——用它恢复会把现有库中
+    对应数据全部清掉。必须在任何破坏性步骤（备份现库、覆盖文件）之前调用。
+    """
+    try:
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
+            member = tar.getmember(EXPORT_MANIFEST_NAME)
+            data = tar.extractfile(member)
+            if data is None:
+                return
+            manifest = json.loads(data.read().decode("utf-8"))
+    except KeyError:
+        return  # 无 EXPORT_INFO.json = 普通备份，放行
+    except (tarfile.TarError, ValueError, UnicodeDecodeError):
+        return  # 打不开清单的按普通归档处理，后续解包环节自会报错
+    if manifest.get("complete") is not True:
+        cats = manifest.get("categories") or []
+        raise RuntimeError(
+            "这是部分导出（仅含 "
+            f"{'、'.join(str(c) for c in cats)}），不能用于恢复："
+            "恢复会清掉未包含类目的现有数据。请上传完整备份，"
+            "或在导出时勾选全部类目。"
+        )
+
+
 def restore(password: str | None = None) -> dict[str, Any]:
     """从 WebDAV 下载并恢复到当前库。
 
@@ -329,6 +360,9 @@ def restore(password: str | None = None) -> dict[str, Any]:
         if not (password and password.strip()):
             raise RuntimeError("该备份已加密，请输入密码")
         payload = decrypt_archive(payload, password.strip())
+
+    # 安全闸：部分导出不可恢复（在任何破坏性步骤之前）
+    validate_restore_blob(payload)
 
     # 先备份当前状态
     if s.db_path.exists():

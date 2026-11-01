@@ -480,6 +480,26 @@ export const api = {
     req<{ ok: boolean; restored_files: number }>('/reading/backup/restore',
       { method: 'POST', body: JSON.stringify({ password: password || null }) }),
 
+  // ---- 本地导出（可选类目）----
+  exportMeta: () =>
+    req<{ categories: Array<{ key: string; label: string; count: number; bytes?: number }> }>(
+      '/reading/export/meta'),
+  runExport: (categories: string[], password?: string) =>
+    req<{
+      ok: boolean; file_name: string; size_mb: number; file_count: number
+      categories: string[]; complete: boolean; encrypted: boolean; created_at: string
+    }>(
+      '/reading/export/run',
+      { method: 'POST', body: JSON.stringify({ categories, password: password || null }) }),
+  listExports: () =>
+    req<{ exports: Array<{ file_name: string; size_bytes: number; size_mb: number; created_at: string; encrypted: boolean }> }>(
+      '/reading/export/list'),
+  deleteExport: (name: string) =>
+    req<{ ok: boolean }>(`/reading/export/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  /** 直接给 <a download> 的地址必须带 /api 前缀与 query token */
+  exportDownloadUrl: (name: string) =>
+    `/api/reading/export/${encodeURIComponent(name)}/download${AUTH_TOKEN ? `?token=${AUTH_TOKEN}` : ''}`,
+
   // ---- AI 探活 ----
   probeAI: () => req<{ ok: boolean; latency_ms?: number; error?: string }>('/reading/config/ai/probe'),
 
