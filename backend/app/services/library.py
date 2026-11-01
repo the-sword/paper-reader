@@ -152,6 +152,11 @@ def import_pdf(src: Path, title: str | None = None, folder_ids: list[str] | None
 
     file_hash = _sha256_of(src)
 
+    # 身份挂接时待重锚的（doc_id, blob 路径）：事务提交后执行——
+    # reanchor 另开连接写库，嵌在事务内会锁库
+    pending_reanchor: tuple[str, Path] | None = None
+    result: dict[str, Any] | None = None
+
     with db() as conn:
         row = conn.execute("SELECT * FROM documents WHERE file_hash=?", (file_hash,)).fetchone()
         if row:
@@ -164,55 +169,67 @@ def import_pdf(src: Path, title: str | None = None, folder_ids: list[str] | None
                 row = conn.execute("SELECT * FROM documents WHERE id=?", (row["id"],)).fetchone()
             if folder_ids:
                 _attach_folders(conn, row["id"], folder_ids)
-            return {**dict(row), "duplicated": duplicated}
+            result = {**dict(row), "duplicated": duplicated}
 
-        # 身份键二级匹配：只为无文件的占位文献挂接
-        identity = extract_identity(src)
-        target = None
-        if identity["arxiv_id"] or identity["doi"]:
-            candidates: list[sqlite3.Row] = []
-            if identity["arxiv_id"]:
-                candidates += conn.execute(
-                    "SELECT * FROM documents WHERE arxiv_id=?", (identity["arxiv_id"],)
-                ).fetchall()
-            if identity["doi"]:
-                candidates += conn.execute(
-                    "SELECT * FROM documents WHERE doi=?", (identity["doi"],)
-                ).fetchall()
-            for c in candidates:
-                if not _blob_path(c["file_hash"]).exists():
-                    target = c
-                    break
-        if target is not None:
-            _attach_file(conn, target["id"], src, file_hash,
-                         meta=extract_pdf_meta(src), identity=identity)
-            if folder_ids:
-                _attach_folders(conn, target["id"], folder_ids)
-            row = conn.execute("SELECT * FROM documents WHERE id=?", (target["id"],)).fetchone()
-            return {**dict(row), "duplicated": False}
+        if result is None:
+            # 身份键二级匹配：只为无文件的占位文献挂接
+            identity = extract_identity(src)
+            target = None
+            if identity["arxiv_id"] or identity["doi"]:
+                candidates: list[sqlite3.Row] = []
+                if identity["arxiv_id"]:
+                    candidates += conn.execute(
+                        "SELECT * FROM documents WHERE arxiv_id=?", (identity["arxiv_id"],)
+                    ).fetchall()
+                if identity["doi"]:
+                    candidates += conn.execute(
+                        "SELECT * FROM documents WHERE doi=?", (identity["doi"],)
+                    ).fetchall()
+                for c in candidates:
+                    if not _blob_path(c["file_hash"]).exists():
+                        target = c
+                        break
+            if target is not None:
+                _attach_file(conn, target["id"], src, file_hash,
+                             meta=extract_pdf_meta(src), identity=identity)
+                if folder_ids:
+                    _attach_folders(conn, target["id"], folder_ids)
+                row = conn.execute(
+                    "SELECT * FROM documents WHERE id=?", (target["id"],)).fetchone()
+                result = {**dict(row), "duplicated": False}
+                # 身份挂接 = 与占位记录的源文件不同版式：该文献已有标注
+                # （来自合并导入）需按 quote 重锚到新 PDF 的坐标
+                pending_reanchor = (target["id"], _blob_path(file_hash))
 
-        doc_id = str(uuid.uuid4())
+    if result is None:
+        # 都不中：新建并回填身份键
         dest = _blob_path(file_hash)
         dest.parent.mkdir(parents=True, exist_ok=True)
         if not dest.exists():
             shutil.copy2(src, dest)
         meta = extract_pdf_meta(src)
+        identity = extract_identity(src)
         resolved_title = title or src.stem
+        doc_id = str(uuid.uuid4())
+        with db() as conn:
+            conn.execute(
+                """INSERT INTO documents
+                   (id, title, file_hash, file_name, file_size, page_count,
+                    arxiv_id, doi, added_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (doc_id, resolved_title, file_hash, src.name, src.stat().st_size,
+                 meta["page_count"], identity["arxiv_id"], identity["doi"], _now()),
+            )
+            if folder_ids:
+                _attach_folders(conn, doc_id, folder_ids)
+            row = conn.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+        result = {**dict(row), "duplicated": False}
 
-        conn.execute(
-            """INSERT INTO documents
-               (id, title, file_hash, file_name, file_size, page_count,
-                arxiv_id, doi, added_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (doc_id, resolved_title, file_hash, src.name, src.stat().st_size,
-             meta["page_count"], identity["arxiv_id"], identity["doi"], _now()),
-        )
-        if folder_ids:
-            _attach_folders(conn, doc_id, folder_ids)
+    if pending_reanchor is not None:
+        from . import reanchor as reanchor_svc
 
-        row = conn.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
-        return {**dict(row), "duplicated": False}
-
+        reanchor_svc.reanchor_document(pending_reanchor[0], pending_reanchor[1])
+    return result
 
 def import_bytes(data: bytes, file_name: str, title: str | None = None,
                  folder_ids: list[str] | None = None) -> dict[str, Any]:

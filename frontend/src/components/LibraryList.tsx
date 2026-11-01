@@ -86,6 +86,9 @@ function LibraryRow({ doc, selected, lastPage, isMobile, onSelect, onOpen, onDel
         <div className="hint" style={{ fontSize: 11, marginTop: 2 }}>{metaParts.join(' · ')}</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5, alignItems: 'center' }}>
           <ParseBadge status={doc.parse_status} />
+          {doc.file_missing && (
+            <span className="badge" style={{ color: 'var(--chip-warn-fg)', borderColor: 'var(--chip-warn-border)', background: 'var(--chip-warn-bg)' }}>缺 PDF</span>
+          )}
           {doc.bilingual_ready && <span className="badge ok">双语✓</span>}
           {(doc.annotation_count ?? 0) > 0 && <span className="badge">笔记 {doc.annotation_count}</span>}
           {doc.tags.slice(0, 3).map((t) => (
@@ -202,6 +205,9 @@ export function MobileDocCard({ doc, lastPage, onOpen, onDelete }: CardProps) {
       <div className="hint" style={{ fontSize: 11, marginTop: 4 }}>{metaParts.join(' · ')}</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6, alignItems: 'center' }}>
         <ParseBadge status={doc.parse_status} />
+        {doc.file_missing && (
+          <span className="badge" style={{ color: 'var(--chip-warn-fg)', borderColor: 'var(--chip-warn-border)', background: 'var(--chip-warn-bg)' }}>缺 PDF</span>
+        )}
         {doc.bilingual_ready && <span className="badge ok">双语✓</span>}
         {(doc.annotation_count ?? 0) > 0 && <span className="badge">笔记 {doc.annotation_count}</span>}
         {doc.tags.slice(0, 2).map((t) => (

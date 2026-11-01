@@ -18,6 +18,7 @@ import CommandPalette, { type PaletteCommand } from './components/CommandPalette
 import ReparseMenu from './components/ReparseMenu'
 import LibraryView from './components/LibraryView'
 import Toasts from './components/Toasts'
+import { toast } from './stores/useToast'
 import { useStore } from './stores/useStore'
 import { useBilingualJob, type BilingualTarget } from './hooks/useBilingualJob'
 import { useQueueWatch } from './hooks/useQueueWatch'
@@ -442,11 +443,65 @@ export default function App() {
   }, [currentDoc, focusMode, readerPrefs.theme, bilingual.ready, view, isMobile, rightOpen, leftOpen])
 
   /** 阅读区主体：无文档 / 双语未生成时给提示，否则渲染 PDF */
+  /** 占位文献（合并导入、PDF 未上传）的引导态与定向上传 */
+  const uploadSlotRef = useRef<HTMLInputElement>(null)
+  const uploadSlotPdf = async (f: File): Promise<void> => {
+    const st = useStore.getState()
+    try {
+      const r = await api.upload(f)
+      await st.refreshLibrary()
+      if (r.id === st.currentDoc?.id) {
+        // 挂到了本占位：重开文档刷新 file_missing，标注（如有漂移）由后端重锚
+        await st.openDocument(r.id)
+        toast.success('PDF 已挂接，标注已就位')
+      } else {
+        toast.notice('该 PDF 未匹配此文献，已作为新文献导入')
+        await st.openDocument(r.id)
+      }
+    } catch (e) {
+      toast.error(String(e).replace(/^Error:\s*/, ''))
+    }
+  }
+
   const renderReaderBody = () => {
     if (!currentDoc) {
       return (
         <div className="hint" style={{ padding: 40, textAlign: 'center' }}>
           {loading ? '加载中…' : '从书库选择或导入一篇 PDF'}
+        </div>
+      )
+    }
+    if (currentDoc.file_missing) {
+      const n = currentDoc.annotation_count ?? 0
+      return (
+        <div style={{
+          height: '100%', display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: 10, padding: 32, textAlign: 'center',
+        }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg-strong)' }}>
+            {currentDoc.title}
+          </div>
+          <div className="hint" style={{ lineHeight: 1.9 }}>
+            该文献来自合并导入，PDF 尚未上传。<br />
+            {n > 0 ? `${n} 条标注已就位，上传后即可阅读与划线。` : '上传 PDF 后即可开始阅读。'}
+            <br />同一版本或同论文（arXiv/DOI 匹配）的 PDF 都可以，坐标自动对齐。
+          </div>
+          <input
+            ref={uploadSlotRef}
+            type="file"
+            accept="application/pdf,.pdf"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              e.target.value = ''
+              if (f) void uploadSlotPdf(f)
+            }}
+          />
+          <button
+            className="btn-primary"
+            style={{ fontSize: 13, padding: '7px 18px', marginTop: 6 }}
+            onClick={() => uploadSlotRef.current?.click()}
+          >选择 PDF 上传</button>
         </div>
       )
     }

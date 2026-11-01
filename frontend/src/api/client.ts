@@ -37,6 +37,8 @@ export interface DocumentMeta {
   annotation_count?: number
   /** 双语 PDF 是否已生成（后端列表接口补充） */
   bilingual_ready?: boolean
+  /** 占位文献：元数据在、PDF 未上传（合并导入产生） */
+  file_missing?: boolean
 }
 export interface Annotation {
   id: string

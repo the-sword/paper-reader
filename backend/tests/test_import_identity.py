@@ -98,3 +98,36 @@ def test_dedup_by_hash_unchanged():
     r2 = library.import_pdf(p)
     assert r2["id"] == r1["id"]
     assert r2["duplicated"] is True
+
+
+def test_identity_attach_triggers_reanchor():
+    """占位（含合并导入的标注）→ 上传同论文不同版式 PDF → 挂接并重锚。"""
+    import json as _json
+
+    quote = "Reanchor target sentence for identity attach."
+    ph_hash = "cd" + "9" * 62
+    doc_id = str(uuid.uuid4())
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO documents (id, title, file_hash, arxiv_id, added_at)"
+            " VALUES (?,?,?,?,datetime('now'))",
+            (doc_id, "待补占位", ph_hash, "2401.31313"),
+        )
+        conn.execute(
+            "INSERT INTO annotations (id, document_id, page, kind, color, rects, quote,"
+            " comment, side, created_at, updated_at)"
+            " VALUES (?,?,5,'highlight','#ffd400','[[0.05,0.05,0.3,0.06]]',?, '', 'source',"
+            " datetime('now'), datetime('now'))",
+            (str(uuid.uuid4()), doc_id, quote),
+        )
+    # 新版式：quote 放在第 1 页 y=400 处
+    p = _tmp_pdf("g.pdf", "arXiv:2401.31313\n" + quote)
+    r = library.import_pdf(p)
+    assert r["id"] == doc_id
+    with db() as conn:
+        ann = conn.execute("SELECT page, rects FROM annotations WHERE document_id=?",
+                           (doc_id,)).fetchone()
+        assert ann["page"] == 1  # 从源版式的第 5 页重锚到第 1 页
+        rects = _json.loads(ann["rects"])
+        # 坐标被重算为新 PDF 里的实际位置（原占位坐标是 [0.05, 0.05, ...]）
+        assert rects and rects[0][1] != 0.05 and 0 < rects[0][1] < 1
