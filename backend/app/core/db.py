@@ -281,6 +281,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "parse_engine" not in cols("documents"):
         conn.execute("ALTER TABLE documents ADD COLUMN parse_engine TEXT")
 
+    # 论文身份键（合并导入按此匹配同论文不同版式的 PDF）
+    if "arxiv_id" not in cols("documents"):
+        conn.execute("ALTER TABLE documents ADD COLUMN arxiv_id TEXT")
+
     # 情报雷达：导入后记录文献 doc_id，看板「打开阅读」直达
     radar_cols = cols("radar_papers")
     if "imported_doc_id" not in radar_cols:

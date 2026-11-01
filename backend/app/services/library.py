@@ -75,8 +75,77 @@ def extract_pdf_meta(path: Path) -> dict[str, Any]:
     return {"page_count": page_count}
 
 
+# 论文身份提取：首页文本里的 arXiv 号与锚定 DOI。
+# 只取「第一个格式合法的匹配」且只扫前两页，避免抓到正文引用的他人 arXiv 号。
+_ARXIV_RE = re.compile(
+    r"arXiv:\s*([a-z-]+(?:\.[A-Z]{2})?/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?", re.I
+)
+# DOI 必须有明确前缀锚（DOI: / doi.org/），裸 10.x 会命中参考文献列表
+_DOI_RE = re.compile(r"(?:doi\.org/|doi\s*[:：]\s*)(10\.\d{4,9}/[^\s\"<>]+)", re.I)
+
+
+def extract_identity(path: Path) -> dict[str, str | None]:
+    """从 PDF 前两页文本提取论文身份键（arxiv_id / doi）。
+
+    PyMuPDF 缺失或提取失败时返回空 dict——身份键是增强信息，不阻塞导入。
+    arXiv 号去掉版本后缀（2401.12345v2 → 2401.12345）：同论文各版本共用身份。
+    """
+    out: dict[str, str | None] = {"arxiv_id": None, "doi": None}
+    try:
+        import fitz  # PyMuPDF
+
+        with fitz.open(str(path)) as doc:
+            text = "\n".join(doc[i].get_text() for i in range(min(2, doc.page_count)))
+        m = _ARXIV_RE.search(text)
+        if m:
+            out["arxiv_id"] = m.group(1).lower()
+        d = _DOI_RE.search(text)
+        if d:
+            # 去掉常见尾部粘连（句读/右括号）
+            out["doi"] = d.group(1).rstrip(".,);")
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _attach_file(conn: sqlite3.Connection, doc_id: str, src: Path, file_hash: str,
+                 meta: dict[str, Any] | None = None,
+                 identity: dict[str, str | None] | None = None) -> None:
+    """把 PDF 文件挂到既有文献行（占位文献后补 / 身份匹配挂接）。
+
+    只在 blob 不存在时落盘；文档行的文件字段与身份键随之补全
+    （身份键仅填非空值，不覆盖已有）。
+    """
+    dest = _blob_path(file_hash)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not dest.exists():
+        shutil.copy2(src, dest)
+    # file_hash 必须同步更新：占位行原来的 hash 指向不存在的 blob，
+    # 不更新则后续去重与 file_missing 判断全部错位
+    sets = ["file_hash=?", "file_name=?", "file_size=?"]
+    params: list[Any] = [file_hash, src.name, src.stat().st_size]
+    if meta and meta.get("page_count"):
+        sets.append("page_count=?")
+        params.append(meta["page_count"])
+    if identity:
+        for k in ("arxiv_id", "doi"):
+            v = identity.get(k)
+            if v:
+                sets.append(f"{k}=COALESCE({k}, ?)")
+                params.append(v)
+    params.append(doc_id)
+    conn.execute(f"UPDATE documents SET {', '.join(sets)} WHERE id=?", params)  # noqa: S608
+
+
 def import_pdf(src: Path, title: str | None = None, folder_ids: list[str] | None = None) -> dict[str, Any]:
-    """导入一篇 PDF。已存在（同哈希）则直接返回既有条目。"""
+    """导入一篇 PDF。
+
+    匹配顺序：
+      1. 同哈希 → 既有条目（若文件缺失则补挂，占位文献场景）
+      2. 身份键（arXiv ID / DOI）→ 只挂接到**无文件**的占位文献，
+         已有文件的同论文不同版式仍新建（不覆盖、不惊喜）
+      3. 都不中 → 新建，顺带回填身份键
+    """
     src = Path(src)
     if not src.exists():
         raise FileNotFoundError(src)
@@ -86,26 +155,57 @@ def import_pdf(src: Path, title: str | None = None, folder_ids: list[str] | None
     with db() as conn:
         row = conn.execute("SELECT * FROM documents WHERE file_hash=?", (file_hash,)).fetchone()
         if row:
-            doc = dict(row)
+            duplicated = True
+            if not _blob_path(file_hash).exists():
+                # 占位文献等到了同哈希的 PDF：落盘补全，按新导入对待
+                _attach_file(conn, row["id"], src, file_hash,
+                             meta=extract_pdf_meta(src))
+                duplicated = False
+                row = conn.execute("SELECT * FROM documents WHERE id=?", (row["id"],)).fetchone()
             if folder_ids:
-                _attach_folders(conn, doc["id"], folder_ids)
-            return {**doc, "duplicated": True}
+                _attach_folders(conn, row["id"], folder_ids)
+            return {**dict(row), "duplicated": duplicated}
+
+        # 身份键二级匹配：只为无文件的占位文献挂接
+        identity = extract_identity(src)
+        target = None
+        if identity["arxiv_id"] or identity["doi"]:
+            candidates: list[sqlite3.Row] = []
+            if identity["arxiv_id"]:
+                candidates += conn.execute(
+                    "SELECT * FROM documents WHERE arxiv_id=?", (identity["arxiv_id"],)
+                ).fetchall()
+            if identity["doi"]:
+                candidates += conn.execute(
+                    "SELECT * FROM documents WHERE doi=?", (identity["doi"],)
+                ).fetchall()
+            for c in candidates:
+                if not _blob_path(c["file_hash"]).exists():
+                    target = c
+                    break
+        if target is not None:
+            _attach_file(conn, target["id"], src, file_hash,
+                         meta=extract_pdf_meta(src), identity=identity)
+            if folder_ids:
+                _attach_folders(conn, target["id"], folder_ids)
+            row = conn.execute("SELECT * FROM documents WHERE id=?", (target["id"],)).fetchone()
+            return {**dict(row), "duplicated": False}
 
         doc_id = str(uuid.uuid4())
         dest = _blob_path(file_hash)
         dest.parent.mkdir(parents=True, exist_ok=True)
         if not dest.exists():
             shutil.copy2(src, dest)
-
-        meta = extract_pdf_meta(dest)
+        meta = extract_pdf_meta(src)
         resolved_title = title or src.stem
 
         conn.execute(
             """INSERT INTO documents
-               (id, title, file_hash, file_name, file_size, page_count, added_at)
-               VALUES (?,?,?,?,?,?,?)""",
+               (id, title, file_hash, file_name, file_size, page_count,
+                arxiv_id, doi, added_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             (doc_id, resolved_title, file_hash, src.name, src.stat().st_size,
-             meta["page_count"], _now()),
+             meta["page_count"], identity["arxiv_id"], identity["doi"], _now()),
         )
         if folder_ids:
             _attach_folders(conn, doc_id, folder_ids)
@@ -158,6 +258,7 @@ def list_documents(folder_id: str | None = None, tag_id: str | None = None,
         for r in rows:
             r["folders"] = _folders_of(conn, r["id"])
             r["tags"] = _tags_of(conn, r["id"])
+            r["file_missing"] = bool(r["file_hash"]) and not _blob_path(r["file_hash"]).exists()
         return rows
 
 
@@ -169,6 +270,8 @@ def get_document(doc_id: str) -> dict[str, Any] | None:
         doc = dict(row)
         doc["folders"] = _folders_of(conn, doc_id)
         doc["tags"] = _tags_of(conn, doc_id)
+        # 占位文献（合并导入建立、PDF 未上传）：前端据此显示缺文件徽标与引导态
+        doc["file_missing"] = bool(doc["file_hash"]) and not _blob_path(doc["file_hash"]).exists()
         return doc
 
 
