@@ -185,3 +185,46 @@ def test_meta_counts(seeded_library):
     assert by_key["library"]["count"] == 1
     assert by_key["annotations"]["count"] == 1
     assert by_key["ai"]["count"] == 1
+
+
+def test_restore_from_file_complete(seeded_library):
+    """全类目导出 → 从文件恢复 → 数据回到库里。"""
+    r = export_svc.build_export(list(export_svc.CATEGORY_TABLES))
+    result = backup_svc.restore_from_file(get_settings().backups_dir / r["file_name"])
+    assert result["ok"] is True
+    assert result["restored_files"] >= 1
+    with db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM annotations").fetchone()[0] == 1
+
+
+def test_restore_from_file_rejects_partial_before_damage(seeded_library):
+    """部分导出恢复被拒，且在任何破坏性步骤之前（未新增 before-restore 备份）。"""
+    # 清掉其他恢复测试留下的历史备份文件，隔离断言
+    for old in get_settings().lib_root.glob("library.db.before-restore-*"):
+        old.unlink()
+    r = export_svc.build_export(["settings"])
+    with pytest.raises(RuntimeError, match="部分导出"):
+        backup_svc.restore_from_file(get_settings().backups_dir / r["file_name"])
+    # 安全闸先于「另存当前库」执行：不应出现任何 before-restore 文件
+    assert not list(get_settings().lib_root.glob("library.db.before-restore-*"))
+
+
+def test_restore_from_file_encrypted_roundtrip(seeded_library):
+    """加密导出 → 错口令报错 → 正确口令恢复成功。"""
+    r = export_svc.build_export(list(export_svc.CATEGORY_TABLES), password="pw-123")
+    path = get_settings().backups_dir / r["file_name"]
+    with pytest.raises(RuntimeError):
+        backup_svc.restore_from_file(path, "wrong-pw")
+    result = backup_svc.restore_from_file(path, "pw-123")
+    assert result["ok"] is True
+
+
+def test_restore_from_file_rejects_garbage(seeded_library):
+    """非归档文件给明确报错，而不是半路崩溃。"""
+    import pytest as _pytest
+
+    bad = get_settings().backups_dir / "export-bad.tar.gz"
+    bad.write_bytes(b"not a tar at all")
+    with _pytest.raises(Exception):
+        backup_svc.restore_from_file(bad)

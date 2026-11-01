@@ -16,7 +16,7 @@
 - **会话线程只有一套**：领读教练（SummaryPanel）与自由问答（ChatPanel）共用 `components/ChatThread.tsx`（ChatThread 气泡线程 + ChatInput 统一 Enter 发送 + 引用块三件套）。新聊天类功能从这里长，不要另起炉灶。
 - **状态色 token**：`global.css` `:root` 里 `--ok/--ok-strong/--ok-bg/--ok-soft`、`--err/--err-bright/--err-bg/--err-solid`、`--warn`、`--chip-ok-*/--chip-warn-*`。组件内联样式不要写散装状态 hex。
 - **轮询必须带文档守卫**：`pollParse`/`translateQueue` 在每次 set 前检查 `currentDoc?.id === docId`，切走即停/丢弃，防跨文档污染（解析完成后由 `syncParseState` 自愈）。
-- **本地导出**（`services/export.py` + 设置「导出」页）：8 类目可选的 tar.gz，与备份同构；全选 = 可恢复完整备份，部分导出带 `EXPORT_INFO.json complete:false`，`backup.validate_restore_blob` 在任何破坏前拒绝恢复。导出侧密钥剔除比备份多一个 `github.token`。产物留 `backups/`（毫秒级文件名防同秒覆盖）。
+- **本地导出**（`services/export.py` + 设置「导出」页）：8 类目可选的 tar.gz，与备份同构；全选 = 可恢复完整备份，部分导出带 `EXPORT_INFO.json complete:false`，`backup.validate_restore_blob` 在任何破坏前拒绝恢复。导出侧密钥剔除比备份多一个 `github.token`。产物留 `backups/`（毫秒级文件名防同秒覆盖）。恢复有两条等价管线：WebDAV 远端与「备份 → 从文件导入」（`restore_from_file`，multipart 流式落盘）。
 
 ## 关键设计决策
 

@@ -310,7 +310,7 @@ def list_remote() -> dict[str, Any]:
 # 恢复
 # ---------------------------------------------------------------------------
 
-def validate_restore_blob(payload: bytes) -> None:
+def validate_restore_blob(payload: bytes | Path) -> None:
     """恢复前的安全闸：拒绝「部分导出」的归档。
 
     services/export.py 产出的可选类目导出带 EXPORT_INFO.json 清单；
@@ -318,7 +318,11 @@ def validate_restore_blob(payload: bytes) -> None:
     对应数据全部清掉。必须在任何破坏性步骤（备份现库、覆盖文件）之前调用。
     """
     try:
-        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
+        if isinstance(payload, bytes):
+            tar_ctx = tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz")
+        else:
+            tar_ctx = tarfile.open(name=payload, mode="r:gz")
+        with tar_ctx as tar:
             member = tar.getmember(EXPORT_MANIFEST_NAME)
             data = tar.extractfile(member)
             if data is None:
@@ -338,39 +342,47 @@ def validate_restore_blob(payload: bytes) -> None:
         )
 
 
-def restore(password: str | None = None) -> dict[str, Any]:
-    """从 WebDAV 下载并恢复到当前库。
-
-    安全措施：恢复前把现有库另存为 library.db.before-restore-<时间戳>
-    """
-    endpoint = _endpoint()
-    user, pw = _auth()
+def _pre_restore_backup() -> None:
+    """覆盖前把现有库另存一份，给误操作留退路。"""
     s = get_settings()
-
-    with make_client(endpoint, timeout=600) as client:
-        r = client.get(endpoint, auth=(user, pw) if user else None)
-    if r.status_code == 404:
-        raise RuntimeError("远端没有找到备份文件")
-    if r.status_code != 200:
-        raise RuntimeError(f"下载失败 HTTP {r.status_code}")
-
-    # 加密归档需先解密
-    payload = r.content
-    if payload.startswith(b"PRBAK001"):
-        if not (password and password.strip()):
-            raise RuntimeError("该备份已加密，请输入密码")
-        payload = decrypt_archive(payload, password.strip())
-
-    # 安全闸：部分导出不可恢复（在任何破坏性步骤之前）
-    validate_restore_blob(payload)
-
-    # 先备份当前状态
     if s.db_path.exists():
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         shutil.copy2(s.db_path, s.lib_root / f"library.db.before-restore-{stamp}")
 
+
+def _load_and_validate(src: bytes | Path, password: str | None) -> bytes | Path:
+    """解密（若加密）+ 跑部分导出安全闸。返回可直接交给 _extract 的源。
+
+    未加密的本地文件保持 Path（tar 流式读取，不占内存）；加密归档
+    必须整体读入才能解密，大文件时内存开销不可避免（与 WebDAV 路径一致）。
+    """
+    if isinstance(src, Path):
+        with open(src, "rb") as f:
+            magic = f.read(8)
+    else:
+        magic = src[:8]
+
+    if magic == b"PRBAK001":
+        if not (password and password.strip()):
+            raise RuntimeError("该备份已加密，请输入密码")
+        blob = src if isinstance(src, bytes) else src.read_bytes()
+        blob = decrypt_archive(blob, password.strip())
+        validate_restore_blob(blob)
+        return blob
+
+    validate_restore_blob(src)
+    return src
+
+
+def _extract(src: bytes | Path) -> int:
+    """把归档解到 lib_root，返回解出的文件数（拒绝穿越/链接成员）。"""
+    s = get_settings()
+    if isinstance(src, bytes):
+        tar_ctx = tarfile.open(fileobj=io.BytesIO(src), mode="r:gz")
+    else:
+        tar_ctx = tarfile.open(name=src, mode="r:gz")
     extracted = 0
-    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
+    with tar_ctx as tar:
         for member in tar.getmembers():
             # 安全：拒绝绝对路径和 .. 穿越
             if member.name.startswith("/") or ".." in Path(member.name).parts:
@@ -394,6 +406,44 @@ def restore(password: str | None = None) -> dict[str, Any]:
     for suffix in ("-wal", "-shm"):
         stale = s.db_path.with_name(s.db_path.name + suffix)
         stale.unlink(missing_ok=True)
+    return extracted
+
+
+def restore(password: str | None = None) -> dict[str, Any]:
+    """从 WebDAV 下载并恢复到当前库。
+
+    安全措施：恢复前把现有库另存为 library.db.before-restore-<时间戳>
+    """
+    endpoint = _endpoint()
+    user, pw = _auth()
+
+    with make_client(endpoint, timeout=600) as client:
+        r = client.get(endpoint, auth=(user, pw) if user else None)
+    if r.status_code == 404:
+        raise RuntimeError("远端没有找到备份文件")
+    if r.status_code != 200:
+        raise RuntimeError(f"下载失败 HTTP {r.status_code}")
+
+    # 解密（若加密）+ 部分导出安全闸，都发生在任何破坏性步骤之前
+    src = _load_and_validate(r.content, password)
+    _pre_restore_backup()
+    extracted = _extract(src)
+
+    return {"ok": True, "restored_files": extracted,
+            "message": "恢复完成。建议重启服务使新库完全生效"}
+
+
+def restore_from_file(path: Path, password: str | None = None) -> dict[str, Any]:
+    """从本地上传的备份/完整导出文件恢复（与 WebDAV 恢复同一管线）。
+
+    path 是已落盘的上传临时文件，由 API 层负责清理。接受：
+      - WebDAV 备份（BACKUP_INFO.json）
+      - 全部类目的本地导出（EXPORT_INFO.json complete=true）
+    部分导出会被 validate_restore_blob 拒绝。
+    """
+    src = _load_and_validate(path, password)
+    _pre_restore_backup()
+    extracted = _extract(src)
 
     return {"ok": True, "restored_files": extracted,
             "message": "恢复完成。建议重启服务使新库完全生效"}

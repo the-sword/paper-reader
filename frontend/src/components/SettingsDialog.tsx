@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   api,
   type AIConfig, type EngineInfo, type EngineTestResult,
@@ -910,6 +910,16 @@ function BackupTab() {
     } catch (e) { setMsg(`❌ ${String(e).replace(/^Error:\s*/, '')}`) } finally { setBusy(null) }
   }
 
+  const fileRef = useRef<HTMLInputElement>(null)
+  const restoreFromFile = async (f: File) => {
+    if (!confirm(`从文件「${f.name}」恢复？当前数据库会先另存一份再覆盖。`)) return
+    setBusy('restorefile'); setMsg('')
+    try {
+      const r = await api.restoreBackupFromFile(f, restorePw || undefined)
+      setMsg(`✅ 已从文件恢复 ${r.restored_files} 个文件，请重启服务；加密备份恢复后需重填 API 密钥`)
+    } catch (e) { setMsg(`❌ ${String(e).replace(/^Error:\s*/, '')}`) } finally { setBusy(null) }
+  }
+
   return (
     <div>
       <p style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 0, lineHeight: 1.6 }}>
@@ -998,6 +1008,21 @@ function BackupTab() {
         </button>
         <button className="btn-ghost" style={{ fontSize: 12 }} disabled={!!busy} onClick={() => void restore()}>
           {busy === 'restore' ? '恢复中…' : '从远端恢复'}
+        </button>
+        {/* 从本地上传的备份/完整导出文件恢复（与远端恢复同一管线与安全闸） */}
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".gz,.tgz,.enc,.tar.gz"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            e.target.value = ''  // 同一文件可重复选择
+            if (f) void restoreFromFile(f)
+          }}
+        />
+        <button className="btn-ghost" style={{ fontSize: 12 }} disabled={!!busy} onClick={() => fileRef.current?.click()}>
+          {busy === 'restorefile' ? '导入中…' : '从文件导入…'}
         </button>
       </div>
 
@@ -1238,7 +1263,7 @@ function ExportTab() {
       )}
 
       <p style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 14, lineHeight: 1.7 }}>
-        · 全部类目的导出 = 完整备份：上传 WebDAV 后可用「备份 → 从远端恢复」。
+        · 全部类目的导出 = 完整备份：可在「备份 → 从文件导入…」直接恢复，或上传 WebDAV 后从远端恢复。
         <br />· 部分导出仅供留存与检视，恢复时会被拒绝（防止清掉未包含的数据）。
         <br />· 导出会自动剔除密钥（AI Key、翻译引擎密钥、WebDAV 密码、GitHub Token）。
       </p>

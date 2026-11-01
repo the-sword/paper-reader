@@ -479,6 +479,14 @@ export const api = {
   restoreBackup: (password?: string) =>
     req<{ ok: boolean; restored_files: number }>('/reading/backup/restore',
       { method: 'POST', body: JSON.stringify({ password: password || null }) }),
+  /** 从本地上传的备份/完整导出文件恢复（multipart，流式落盘） */
+  restoreBackupFromFile: (file: File, password?: string) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    if (password) fd.append('password', password)
+    return req<{ ok: boolean; restored_files: number; message: string }>(
+      '/reading/backup/restore/file', { method: 'POST', body: fd })
+  },
 
   // ---- 本地导出（可选类目）----
   exportMeta: () =>

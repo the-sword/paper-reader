@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 import threading
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from ..services import backup as backup_svc
@@ -247,6 +248,43 @@ def restore_backup(body: RestoreReq | None = None) -> dict[str, Any]:
         return backup_svc.restore(password=body.password if body else None)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, str(e)) from e
+
+
+#: 上传恢复文件的大小上限（含 PDF 的归档可能较大，但不应超过库存总量）
+RESTORE_FILE_MAX_BYTES = 4 * 1024 * 1024 * 1024
+
+
+@router.post("/backup/restore/file")
+async def restore_from_file(
+    file: UploadFile = File(...),
+    password: str | None = Form(None),
+) -> dict[str, Any]:
+    """从本地上传的备份/完整导出文件恢复（流式落盘，避免整读进内存）。"""
+    import time
+    from pathlib import Path
+
+    # 临时文件名自生成：上传的 filename 不可信，不拼进路径
+    tmp = Path(tempfile.gettempdir()) / f"pr-restore-upload-{time.time_ns()}"
+    size = 0
+    try:
+        with open(tmp, "wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > RESTORE_FILE_MAX_BYTES:
+                    raise HTTPException(400, "文件超过 4GB")
+                out.write(chunk)
+        if size == 0:
+            raise HTTPException(400, "上传的文件为空")
+        try:
+            return backup_svc.restore_from_file(tmp, password)
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.exception("文件恢复失败")
+            raise HTTPException(502, f"恢复失败：{e}") from e
+    finally:
+        tmp.unlink(missing_ok=True)
+        await file.close()
 
 
 # ---------------------------------------------------------------------------
