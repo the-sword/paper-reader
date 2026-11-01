@@ -255,11 +255,13 @@ def build_export(categories: list[str], password: str | None = None) -> dict[str
     if encrypted:
         blob = backup_svc.encrypt_archive(blob, password.strip())  # type: ignore[arg-type]
 
-    # 毫秒级时间戳：同秒内连续导出不互相覆盖
+    # 毫秒级时间戳：同秒内连续导出不互相覆盖；
+    # 部分导出加 -part 标记：文件名即可辨识，避免误当作可恢复的完整备份
     now = datetime.now()
     stamp = now.strftime("%Y%m%d-%H%M%S") + now.strftime("%f")[:3]
+    part = "" if complete else "-part"
     suffix = backup_svc.ENCRYPTED_SUFFIX if encrypted else ""
-    name = f"export-{stamp}.tar.gz{suffix}"
+    name = f"export-{stamp}{part}.tar.gz{suffix}"
     s.backups_dir.mkdir(parents=True, exist_ok=True)
     (s.backups_dir / name).write_bytes(blob)
 
@@ -316,3 +318,79 @@ def export_path(name: str) -> Path:
 
 def delete_export(name: str) -> None:
     export_path(name).unlink(missing_ok=True)
+
+
+def merge_settings_from_file(path: Path, password: str | None = None) -> dict[str, Any]:
+    """从备份/导出归档中**只合并 settings 表**，库的其余数据不动。
+
+    设置是唯一可安全合并的类目：纯 key-value、无外键、不引用文件。
+    - 密钥类键在导出/备份时已被剔除，这里再防御性跳过（任何来源的
+      文件都不能覆盖现有密钥）
+    - radar.topics 是雷达配置真源，走 set_topics 校验并同步镜像表
+    - 直接改库不换文件：无需重启，立即生效
+    """
+    import sqlite3
+
+    from . import radar_topics
+
+    # 解密（若加密）：设置类归档很小，整读没有内存压力
+    with open(path, "rb") as f:
+        magic = f.read(8)
+    if magic == b"PRBAK001":
+        if not (password and password.strip()):
+            raise RuntimeError("该文件已加密，请输入密码")
+        blob = backup_svc.decrypt_archive(path.read_bytes(), password.strip())
+        tar_ctx = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz")
+    else:
+        tar_ctx = tarfile.open(name=path, mode="r:gz")
+
+    # 从归档的 library.db 里读 settings（解到临时文件，不覆盖任何真库）
+    rows: list[tuple[str, str]] = []
+    with tar_ctx as tar:
+        member = tar.getmember("library.db")
+        tmp_db = Path(tempfile.gettempdir()) / f"pr-merge-settings-{datetime.now().timestamp()}.db"
+        try:
+            with open(tmp_db, "wb") as out:
+                out.write(tar.extractfile(member).read())  # type: ignore[arg-type]
+            conn = sqlite3.connect(tmp_db)
+            try:
+                rows = conn.execute("SELECT key, value FROM settings").fetchall()
+            finally:
+                conn.close()
+        finally:
+            tmp_db.unlink(missing_ok=True)
+
+    if not rows:
+        return {"ok": True, "imported": 0, "skipped_secret": 0,
+                "message": "文件里没有可导入的设置"}
+
+    by_key = dict(rows)
+
+    # 雷达配置先走校验+镜像同步：非法（如手改过的归档）在动任何键之前报错
+    topics_raw = by_key.pop(radar_topics.TOPICS_KEY, None)
+    if topics_raw is not None:
+        try:
+            topics = json.loads(topics_raw)
+            radar_topics.set_topics(topics)  # 校验 + 写 settings + 同步镜像表
+        except (ValueError, json.JSONDecodeError) as e:
+            raise RuntimeError(f"文件中的雷达配置非法，已中止（未改动任何设置）：{e}") from e
+
+    imported = 1 if topics_raw is not None else 0
+    skipped_secret = 0
+    with db() as conn:
+        for key, value in by_key.items():
+            if any(key == p or key.startswith(p) for p in SENSITIVE_SETTING_PREFIXES):
+                skipped_secret += 1
+                continue
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+            imported += 1
+
+    msg = f"已合并 {imported} 项设置，立即生效"
+    if skipped_secret:
+        msg += f"（跳过 {skipped_secret} 项密钥类配置）"
+    return {"ok": True, "imported": imported, "skipped_secret": skipped_secret,
+            "message": msg}

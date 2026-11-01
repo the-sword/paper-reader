@@ -228,3 +228,110 @@ def test_restore_from_file_rejects_garbage(seeded_library):
     bad.write_bytes(b"not a tar at all")
     with _pytest.raises(Exception):
         backup_svc.restore_from_file(bad)
+
+
+def test_merge_settings_overwrites_and_keeps_secrets(seeded_library):
+    """仅导出设置 → 改本地值 → 合并：文件值覆盖，本地密钥不受影响，文献不动。"""
+    r = export_svc.build_export(["settings"])
+    path = get_settings().backups_dir / r["file_name"]
+
+    # 本地把偏好改掉 + 加一个导出时没有的密钥（导出侧已剔密钥）
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('ui.view_mode', '\"zh\"')"
+            " ON CONFLICT(key) DO UPDATE SET value='\"zh\"'")
+        conn.execute("INSERT INTO settings (key, value) VALUES ('engine.baidu', '{\"appkey\":\"local-secret\"}')")
+
+    result = export_svc.merge_settings_from_file(path)
+    assert result["ok"] is True
+    assert result["imported"] >= 2  # ui.view_mode + glossary
+
+    with db() as conn:
+        # 同名键被文件值覆盖
+        v = conn.execute("SELECT value FROM settings WHERE key='ui.view_mode'").fetchone()[0]
+        assert v == '"pdf"'
+        # 本地密钥原样保留（文件里根本没有这个键）
+        e = conn.execute("SELECT value FROM settings WHERE key='engine.baidu'").fetchone()
+        assert e is not None and "local-secret" in e[0]
+        # 文献没被动
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+
+
+def test_merge_settings_skips_secrets_in_file(seeded_library):
+    """手改过的归档里塞了密钥键：合并时防御性跳过，不覆盖现有配置。"""
+    import gzip as _gzip
+    import shutil as _shutil
+
+    r = export_svc.build_export(["settings"])
+    path = get_settings().backups_dir / r["file_name"]
+
+    # 重打包：往归档里的 library.db settings 表塞一个 ai.api_key
+    blob = path.read_bytes()
+    tar_in = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar_out:
+        for member in tar_in.getmembers():
+            data = tar_in.extractfile(member).read() if member.isfile() else None
+            if member.name == "library.db":
+                tmp = Path(tempfile.gettempdir()) / "pr-merge-craft.db"
+                tmp.write_bytes(data)  # type: ignore[arg-type]
+                c = sqlite3.connect(tmp)
+                c.execute("INSERT INTO settings (key, value) VALUES ('ai.api_key', '\"evil\"')")
+                c.commit(); c.close()
+                tar_out.add(tmp, arcname="library.db")
+                tmp.unlink()
+            elif data is not None:
+                import copy
+                m2 = copy.copy(member)
+                tar_out.addfile(m2, io.BytesIO(data))
+    tar_in.close()
+    path.write_bytes(buf.getvalue())
+
+    result = export_svc.merge_settings_from_file(path)
+    assert result["skipped_secret"] >= 1
+    with db() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key='ai.api_key'").fetchone()
+        # 活库原有的密钥保留，未被归档里的 "evil" 覆盖
+        assert row is not None and "evil" not in row[0]
+
+
+def test_merge_settings_encrypted(seeded_library):
+    """加密的设置导出 → 错口令报错 → 正口令合并成功。"""
+    r = export_svc.build_export(["settings"], password="pw-9")
+    path = get_settings().backups_dir / r["file_name"]
+    with pytest.raises(RuntimeError):
+        export_svc.merge_settings_from_file(path, "wrong")
+    result = export_svc.merge_settings_from_file(path, "pw-9")
+    assert result["ok"] is True
+
+
+def test_merge_settings_syncs_radar_mirror(seeded_library):
+    """含 radar.topics 的文件合并后，radar_topics 镜像表同步。"""
+    topics = [{"id": "t_merge", "name": "合并主题", "categories": ["cs.CV"], "keywords": []}]
+    with db() as conn:
+        conn.execute("INSERT INTO settings (key, value) VALUES ('radar.topics', ?)",
+                     (json.dumps(topics, ensure_ascii=False),))
+    r = export_svc.build_export(["settings"])
+    # 清掉镜像表模拟「目标库尚未同步」
+    with db() as conn:
+        conn.execute("DELETE FROM radar_topics")
+        conn.execute("DELETE FROM settings WHERE key='radar.topics'")
+
+    result = export_svc.merge_settings_from_file(get_settings().backups_dir / r["file_name"])
+    assert result["ok"] is True
+    with db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM radar_topics WHERE id='t_merge'").fetchone()[0] == 1
+
+
+def test_merge_settings_no_library_damage(seeded_library):
+    """合并不换库文件：无 before-restore 备份、无 annotations-md 目录。"""
+    import shutil as _shutil
+
+    # 清掉其他恢复测试落在 lib_root 的残留，隔离断言
+    for old in get_settings().lib_root.glob("library.db.before-restore-*"):
+        old.unlink()
+    _shutil.rmtree(get_settings().lib_root / "annotations-md", ignore_errors=True)
+    r = export_svc.build_export(["settings"])
+    export_svc.merge_settings_from_file(get_settings().backups_dir / r["file_name"])
+    assert not list(get_settings().lib_root.glob("library.db.before-restore-*"))
+    assert not (get_settings().lib_root / "annotations-md").exists()
