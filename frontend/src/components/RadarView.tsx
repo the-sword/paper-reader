@@ -12,14 +12,14 @@ import {
   type RadarDayResponse, type RadarPaper, type RadarPipelineJob, type RadarRepoItem, type RadarTopic,
 } from '../api/client'
 import { useStore } from '../stores/useStore'
+import { toast } from '../stores/useToast'
 
-type Toast = { text: string; undo?: () => void; kind?: 'ok' | 'err' }
 type Filter = { kind: 'all' | 'topic' | 'code' | 'saved' | 'repos'; topicId?: string }
 
 const CODE_BADGE: Record<RadarPaper['code_status'], { text: string; color: string; bg: string; border: string }> = {
-  code_available: { text: '✓ 代码可用', color: '#067647', bg: '#DCFAE6', border: '#ABEFC6' },
-  placeholder: { text: '⚠ 占位仓库', color: '#B54708', bg: '#FEF0C7', border: '#FEDF89' },
-  no_code: { text: '无代码', color: '#667085', bg: 'var(--bg-side)', border: 'var(--border)' },
+  code_available: { text: '✓ 代码可用', color: 'var(--chip-ok-fg)', bg: 'var(--chip-ok-bg)', border: 'var(--chip-ok-border)' },
+  placeholder: { text: '⚠ 占位仓库', color: 'var(--chip-warn-fg)', bg: 'var(--chip-warn-bg)', border: 'var(--chip-warn-border)' },
+  no_code: { text: '无代码', color: 'var(--fg-muted)', bg: 'var(--bg-side)', border: 'var(--border)' },
 }
 
 function fmtDate(d: string): string { return d || '' }
@@ -60,15 +60,6 @@ export default function RadarView() {
   const [searchResult, setSearchResult] = useState<RadarPaper[] | null>(null)
   const [searching, setSearching] = useState(false)
 
-  // ---- Toast ----
-  const [toast, setToast] = useState<Toast | null>(null)
-  const toastTimer = useRef<number | null>(null)
-  const showToast = useCallback((t: Toast) => {
-    setToast(t)
-    if (toastTimer.current) window.clearTimeout(toastTimer.current)
-    toastTimer.current = window.setTimeout(() => setToast(null), 5000)
-  }, [])
-
   const loadDay = useCallback(async (date?: string) => {
     setLoading(true)
     try {
@@ -78,11 +69,11 @@ export default function RadarView() {
       setDay(res)
     } catch (e) {
       setDay({ date: date || todayStr(), topics: {}, total: 0 })
-      showToast({ text: String(e).replace(/^Error:\s*/, ''), kind: 'err' })
+      toast.error(String(e).replace(/^Error:\s*/, ''))
     } finally {
       setLoading(false)
     }
-  }, [showToast])
+  }, [])
 
   const loadTopics = useCallback(async () => {
     try {
@@ -98,7 +89,6 @@ export default function RadarView() {
 
   useEffect(() => () => {
     if (pollRef.current) window.clearInterval(pollRef.current)
-    if (toastTimer.current) window.clearTimeout(toastTimer.current)
   }, [])
 
   const topicName = (id: string) => topics.find((t) => t.id === id)?.name || id
@@ -117,12 +107,12 @@ export default function RadarView() {
           if (j.status === 'done') {
             const parts = Object.values(j.result?.topics || {})
               .map((s) => `${s.name}：初筛${s.stage1}/评审${s.reviewed}/入选${s.shown}`)
-            showToast({ text: `管道完成${parts.length ? ' · ' + parts.join('，') : ''}` })
+            toast.success(`管道完成${parts.length ? ' · ' + parts.join('，') : ''}`)
             await loadDay(viewing)
           } else if (j.status === 'failed') {
-            showToast({ text: `管道失败：${j.error || '未知错误'}`, kind: 'err' })
+            toast.error(`管道失败：${j.error || '未知错误'}`)
           } else {
-            showToast({ text: '已取消管道' })
+            toast.success('已取消管道')
           }
         }
       } catch { /* 轮询失败静默重试 */ }
@@ -136,7 +126,7 @@ export default function RadarView() {
       setJob({ id: res.job_id, kind: 'radar-pipeline', status: 'running', progress: 0, message: '准备中' })
       startPoll(res.job_id)
     } catch (e) {
-      showToast({ text: String(e).replace(/^Error:\s*/, ''), kind: 'err' })
+      toast.error(String(e).replace(/^Error:\s*/, ''))
     }
   }
 
@@ -164,15 +154,15 @@ export default function RadarView() {
       await api.radarActOnPaper(p.id, action)
       done?.()
     } catch (e) {
-      showToast({ text: String(e).replace(/^Error:\s*/, ''), kind: 'err' })
+      toast.error(String(e).replace(/^Error:\s*/, ''))
     }
   }
 
   const handleDismiss = (p: RadarPaper) => {
     actLocal(p.id, 'dismissed')
-    showToast({
-      text: '已忽略，14 天内不再主动展示',
-      undo: () => { void doAction(p, 'restore', () => { actLocal(p.id, 'new'); void loadDay(viewing) }) },
+    toast.success('已忽略，14 天内不再主动展示', {
+      label: '撤销',
+      run: () => { void doAction(p, 'restore', () => { actLocal(p.id, 'new'); void loadDay(viewing) }) },
     })
     void doAction(p, 'dismiss')
   }
@@ -180,9 +170,9 @@ export default function RadarView() {
   const handleSave = (p: RadarPaper) => {
     const toSaved = p.action !== 'saved'
     actLocal(p.id, toSaved ? 'saved' : 'new')
-    showToast({
-      text: toSaved ? '已收藏，可稍后导入' : '已取消收藏',
-      undo: () => { void doAction(p, toSaved ? 'unsave' : 'save', () => actLocal(p.id, toSaved ? 'new' : 'saved')) },
+    toast.success(toSaved ? '已收藏，可稍后导入' : '已取消收藏', {
+      label: '撤销',
+      run: () => { void doAction(p, toSaved ? 'unsave' : 'save', () => actLocal(p.id, toSaved ? 'new' : 'saved')) },
     })
     void doAction(p, toSaved ? 'save' : 'unsave')
   }
@@ -191,7 +181,7 @@ export default function RadarView() {
     actLocal(p.id, 'dismissed')
     setMenuFor(null)
     setBlockConfirm(null)
-    showToast({ text: '已拉黑，该论文永不再推荐', undo: () => { void doAction(p, 'restore', () => { actLocal(p.id, 'new'); void loadDay(viewing) }) } })
+    toast.success('已拉黑，该论文永不再推荐', { label: '撤销', run: () => { void doAction(p, 'restore', () => { actLocal(p.id, 'new'); void loadDay(viewing) }) } })
     void doAction(p, 'block')
   }
 
@@ -210,9 +200,9 @@ export default function RadarView() {
         }
         return { ...cur, topics: topicsNext }
       })
-      showToast({ text: `已导入：${p.title.slice(0, 40)}` })
+      toast.success(`已导入：${p.title.slice(0, 40)}`)
     } catch (e) {
-      showToast({ text: `导入失败：${String(e).replace(/^Error:\s*/, '')}`, kind: 'err' })
+      toast.error(`导入失败：${String(e).replace(/^Error:\s*/, '')}`)
     } finally {
       setImporting((m) => ({ ...m, [p.id]: false }))
     }
@@ -222,9 +212,9 @@ export default function RadarView() {
     try {
       const text = await api.radarBibtex(p.id)
       await navigator.clipboard.writeText(text)
-      showToast({ text: 'BibTeX 已复制到剪贴板' })
+      toast.success('BibTeX 已复制到剪贴板')
     } catch (e) {
-      showToast({ text: String(e).replace(/^Error:\s*/, ''), kind: 'err' })
+      toast.error(String(e).replace(/^Error:\s*/, ''))
     } finally { setMenuFor(null) }
   }
 
@@ -244,25 +234,25 @@ export default function RadarView() {
       await api.radarActOnPaper(r.id, action)
       done?.()
     } catch (e) {
-      showToast({ text: String(e).replace(/^Error:\s*/, ''), kind: 'err' })
+      toast.error(String(e).replace(/^Error:\s*/, ''))
     }
   }
 
   const handleRepoSave = (r: RadarRepoItem) => {
     const toSaved = r.action !== 'saved'
     actRepoLocal(r.id, toSaved ? 'saved' : 'new')
-    showToast({
-      text: toSaved ? '已收藏该开源项目' : '已取消收藏',
-      undo: () => { void doRepoAction(r, toSaved ? 'unsave' : 'save', () => actRepoLocal(r.id, toSaved ? 'new' : 'saved')) },
+    toast.success(toSaved ? '已收藏该开源项目' : '已取消收藏', {
+      label: '撤销',
+      run: () => { void doRepoAction(r, toSaved ? 'unsave' : 'save', () => actRepoLocal(r.id, toSaved ? 'new' : 'saved')) },
     })
     void doRepoAction(r, toSaved ? 'save' : 'unsave')
   }
 
   const handleRepoDismiss = (r: RadarRepoItem) => {
     actRepoLocal(r.id, 'dismissed')
-    showToast({
-      text: '已忽略，14 天内不再主动展示',
-      undo: () => { void doRepoAction(r, 'restore', () => { actRepoLocal(r.id, 'new'); void loadDay(viewing) }) },
+    toast.success('已忽略，14 天内不再主动展示', {
+      label: '撤销',
+      run: () => { void doRepoAction(r, 'restore', () => { actRepoLocal(r.id, 'new'); void loadDay(viewing) }) },
     })
     void doRepoAction(r, 'dismiss')
   }
@@ -271,7 +261,7 @@ export default function RadarView() {
     actRepoLocal(r.id, 'dismissed')
     setMenuFor(null)
     setBlockConfirm(null)
-    showToast({ text: '已拉黑，该项目永不再推荐', undo: () => { void doRepoAction(r, 'restore', () => { actRepoLocal(r.id, 'new'); void loadDay(viewing) }) } })
+    toast.success('已拉黑，该项目永不再推荐', { label: '撤销', run: () => { void doRepoAction(r, 'restore', () => { actRepoLocal(r.id, 'new'); void loadDay(viewing) }) } })
     void doRepoAction(r, 'block')
   }
 
@@ -285,7 +275,7 @@ export default function RadarView() {
       const res = await api.radarSearch({ q: query, limit: 60 })
       setSearchResult(res.items)
     } catch (e) {
-      showToast({ text: String(e).replace(/^Error:\s*/, ''), kind: 'err' })
+      toast.error(String(e).replace(/^Error:\s*/, ''))
     } finally { setSearching(false) }
   }
 
@@ -337,11 +327,11 @@ export default function RadarView() {
           </span>
           <span style={{ color: 'var(--fg-muted)' }}>开源项目</span>
           {saved && (
-            <span style={{ background: '#FEF0C7', border: '1px solid #FEDF89', color: '#B54708', borderRadius: 10, padding: '1px 8px' }}>★ 已收藏</span>
+            <span style={{ background: 'var(--chip-warn-bg)', border: '1px solid var(--chip-warn-border)', color: 'var(--chip-warn-fg)', borderRadius: 10, padding: '1px 8px' }}>★ 已收藏</span>
           )}
           <span style={{
-            marginLeft: 'auto', background: '#DCFAE6', border: '1px solid #ABEFC6',
-            color: '#067647', borderRadius: 10, padding: '1px 8px', whiteSpace: 'nowrap',
+            marginLeft: 'auto', background: 'var(--chip-ok-bg)', border: '1px solid var(--chip-ok-border)',
+            color: 'var(--chip-ok-fg)', borderRadius: 10, padding: '1px 8px', whiteSpace: 'nowrap',
           }}>
             ★ {r.stars.toLocaleString()}{r.star_growth > 0 && ` · ↗${r.star_growth}/天`}
           </span>
@@ -352,7 +342,7 @@ export default function RadarView() {
             {r.title}
           </a>
           {isNew && (
-            <span style={{ marginLeft: 8, fontSize: 10, color: '#B45309', background: '#FEF0C7', borderRadius: 8, padding: '1px 6px' }}>
+            <span style={{ marginLeft: 8, fontSize: 10, color: 'var(--chip-warn-fg)', background: 'var(--chip-warn-bg)', borderRadius: 8, padding: '1px 6px' }}>
               新项目
             </span>
           )}
@@ -383,7 +373,7 @@ export default function RadarView() {
                 <div style={{
                   position: 'absolute', right: 0, top: 30, zIndex: 41, width: 150,
                   background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
-                  boxShadow: '0 8px 24px rgba(15,23,42,.18)', padding: '4px 0', overflow: 'hidden',
+                  boxShadow: 'var(--shadow-pop)', padding: '4px 0', overflow: 'hidden',
                 }}>
                   <MenuItem onClick={() => { window.open(r.url, '_blank'); setMenuFor(null) }}>打开仓库</MenuItem>
                   <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
@@ -404,7 +394,7 @@ export default function RadarView() {
   const renderStars = (score: number | null) => {
     const n = Math.max(0, Math.min(5, Math.round(score || 0)))
     return (
-      <span style={{ fontSize: 11, letterSpacing: 1, color: '#F79009', whiteSpace: 'nowrap' }} title={`评审分 ${score ?? '—'}/5`}>
+      <span style={{ fontSize: 11, letterSpacing: 1, color: 'var(--warn)', whiteSpace: 'nowrap' }} title={`评审分 ${score ?? '—'}/5`}>
         {'★'.repeat(n)}<span style={{ color: 'var(--border)' }}>{'★'.repeat(5 - n)}</span>
       </span>
     )
@@ -444,10 +434,10 @@ export default function RadarView() {
           )}
           {rv.primary_tag && <span style={{ color: 'var(--fg-muted)' }}>#{rv.primary_tag}</span>}
           {saved && (
-            <span style={{ background: '#FEF0C7', border: '1px solid #FEDF89', color: '#B54708', borderRadius: 10, padding: '1px 8px' }}>★ 已收藏</span>
+            <span style={{ background: 'var(--chip-warn-bg)', border: '1px solid var(--chip-warn-border)', color: 'var(--chip-warn-fg)', borderRadius: 10, padding: '1px 8px' }}>★ 已收藏</span>
           )}
           {imported && (
-            <span style={{ background: '#DCFAE6', border: '1px solid #ABEFC6', color: '#067647', borderRadius: 10, padding: '1px 8px' }}>✓ 已在库</span>
+            <span style={{ background: 'var(--chip-ok-bg)', border: '1px solid var(--chip-ok-border)', color: 'var(--chip-ok-fg)', borderRadius: 10, padding: '1px 8px' }}>✓ 已在库</span>
           )}
           <span style={{
             marginLeft: 'auto', color: badge.color, background: badge.bg,
@@ -472,7 +462,7 @@ export default function RadarView() {
             {rv.problem_solved && <div><b style={{ color: 'var(--accent)' }}>痛点</b>　{rv.problem_solved}</div>}
             {rv.core_innovation && <div><b style={{ color: 'var(--accent)' }}>方法</b>　{rv.core_innovation}</div>}
             {rv.practical_value && <div><b style={{ color: 'var(--accent)' }}>价值</b>　{rv.practical_value}</div>}
-            {p.review_status === 'review_failed' && <div style={{ color: '#b91c1c' }}>评审失败（LLM 未返回有效结果）</div>}
+            {p.review_status === 'review_failed' && <div style={{ color: 'var(--err)' }}>评审失败（LLM 未返回有效结果）</div>}
           </div>
         )}
 
@@ -516,7 +506,7 @@ export default function RadarView() {
                 <div style={{
                   position: 'absolute', right: 0, top: 30, zIndex: 41, width: 150,
                   background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
-                  boxShadow: '0 8px 24px rgba(15,23,42,.18)', padding: '4px 0', overflow: 'hidden',
+                  boxShadow: 'var(--shadow-pop)', padding: '4px 0', overflow: 'hidden',
                 }}>
                   <MenuItem onClick={() => void handleBibtex(p)}>复制 BibTeX</MenuItem>
                   <MenuItem onClick={() => { window.open(absUrl, '_blank'); setMenuFor(null) }}>打开 arXiv 页面</MenuItem>
@@ -723,23 +713,7 @@ export default function RadarView() {
         </>
       )}
 
-      {/* Toast */}
-      {toast && (
-        <div style={{
-          position: 'fixed', right: 24, bottom: 24, zIndex: 50,
-          display: 'flex', alignItems: 'center', gap: 10,
-          background: toast.kind === 'err' ? '#7f1d1d' : '#101828', color: '#fff',
-          borderRadius: 8, padding: '9px 14px', fontSize: 12,
-          boxShadow: '0 8px 24px rgba(15,23,42,.35)', maxWidth: 420,
-        }}>
-          <span>{toast.kind === 'err' ? '✕' : '✓'}</span>
-          <span style={{ flex: 1 }}>{toast.text}</span>
-          {toast.undo && (
-            <span style={{ color: '#A5B4FC', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
-              onClick={() => { toast.undo?.(); setToast(null) }}>撤销</span>
-          )}
-        </div>
-      )}
+      {/* Toast 统一由 App 根部的 <Toasts /> 渲染（stores/useToast） */}
     </div>
   )
 }
@@ -780,7 +754,7 @@ function MenuItem({ onClick, danger, children }: {
   return (
     <div onClick={onClick} style={{
       padding: '7px 14px', fontSize: 12, cursor: 'pointer',
-      color: danger ? '#D92D20' : 'var(--fg)',
+      color: danger ? 'var(--err-bright)' : 'var(--fg)',
     }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-side)' }}
       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
       {children}

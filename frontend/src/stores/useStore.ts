@@ -4,6 +4,7 @@ import {
   type Annotation, type DocumentMeta, type Folder, type RemapReport, type Segment, type Tag,
 } from '../api/client'
 import { DEFAULT_ANNOTATION_COLOR } from '../lib/annotationColors'
+import { toast } from './useToast'
 
 /** 书库智能视图：客户端在已获取的文献列表上过滤 */
 export type SmartView = 'all' | 'recent' | 'unread' | 'parsed' | 'bilingual' | 'annotated'
@@ -22,13 +23,6 @@ export interface JumpRequest {
 export interface ChatQuote {
   text: string
   page: number
-}
-/** 提示条动作：点击整条提示时执行（如「查看」跳转到目标文档） */
-export interface NoticeAction {
-  /** 动作按钮文案 */
-  label: string
-  /** 点击时执行的动作 */
-  run: () => void
 }
 /** 自动发送的问题（「解释」用），由 ChatPanel 消费后清空 */
 export interface ChatAutoSend {
@@ -132,9 +126,7 @@ export function sortDocuments(docs: DocumentMeta[], sort: LibrarySort): Document
 /** 段落流标注无法自动对应时给出提示；全部迁移成功则不打扰 */
 function announceRemap(remap?: RemapReport): void {
   if (!remap || remap.detached <= 0) return
-  useStore.setState({
-    notice: `重新解析完成：${remap.detached} 条段落标注无法自动对应，已保留为页面标注`,
-  })
+  toast.notice(`重新解析完成：${remap.detached} 条段落标注无法自动对应，已保留为页面标注`)
 }
 
 interface State {
@@ -150,7 +142,6 @@ interface State {
   activeTag: string | null
   search: string
   loading: boolean
-  error: string | null
   mainView: MainView
   /** 已打开的文档标签页（顺序即标签栏顺序） */
   openTabs: OpenTab[]
@@ -182,11 +173,6 @@ interface State {
   showReparse: boolean
   setShowReparse: (v: boolean) => void
   parseState: string
-  /** 轻量提示条：文案 + 可选动作（如队列完成「查看」）；定时自动清除 */
-  notice: string | null
-  /** 提示条点击动作（随 notice 一起设置/清除） */
-  noticeAction: NoticeAction | null
-  setNotice: (msg: string | null, action?: NoticeAction | null) => void
   /** 队列完成通知请求打开某文档的双语视图（switchView 在 App 内，经此中转） */
   bilingualViewRequest: { docId: string; nonce: number } | null
   requestBilingualView: (docId: string) => void
@@ -220,7 +206,6 @@ interface State {
   setFocusAnnotation: (id: string | null) => void
   setLastColor: (color: string) => void
   removeAnnotation: (id: string) => Promise<void>
-  clearError: () => void
   moveDocumentToFolder: (docId: string, folderId: string | null, additive?: boolean) => Promise<void>
 
   // 阅读动作
@@ -253,7 +238,6 @@ export const useStore = create<State>((set, get) => ({
   activeTag: null,
   search: '',
   loading: false,
-  error: null,
   mainView: 'library',
   openTabs: readLocal<OpenTab[]>(LS_TABS, [], isOpenTabs),
   pagePos: readLocal<Record<string, number>>(LS_PAGE_POS, {}, isPagePos),
@@ -276,9 +260,6 @@ export const useStore = create<State>((set, get) => ({
   showReparse: false,
   setShowReparse: (v) => set({ showReparse: v }),
   parseState: 'idle',   // idle=未解析 | queued=排队中 | pending/running=进行中 | done | failed
-  notice: null,
-  noticeAction: null,
-  setNotice: (msg, action) => set({ notice: msg, noticeAction: action ?? null }),
   bilingualViewRequest: null,
   requestBilingualView: (docId) =>
     set({ bilingualViewRequest: { docId, nonce: (get().bilingualViewRequest?.nonce ?? 0) + 1 } }),
@@ -294,7 +275,7 @@ export const useStore = create<State>((set, get) => ({
   refreshLibrary: async () => {
     // 请求序号：连续触发（如搜索逐字输入）时只采纳最后一次的结果，防止旧响应晚到覆盖
     const seq = ++librarySeq
-    set({ loading: true, error: null })
+    set({ loading: true })
     try {
       const { activeFolder, activeTag, search } = get()
       const filtered = !!(activeFolder || activeTag || search)
@@ -311,12 +292,13 @@ export const useStore = create<State>((set, get) => ({
       set({ documents, allDocuments: allDocuments ?? documents, loading: false })
     } catch (e) {
       if (seq !== librarySeq) return
-      set({ error: String(e), loading: false })
+      toast.error(String(e))
+      set({ loading: false })
     }
   },
 
   openDocument: async (id) => {
-    set({ loading: true, error: null, segments: [], translations: {}, parseState: 'idle', parseProgress: 0, mainView: 'reader' })
+    set({ loading: true, segments: [], translations: {}, parseState: 'idle', parseProgress: 0, mainView: 'reader' })
     try {
       const currentDoc = await api.getDocument(id)
       const annotations = await api.listAnnotations(id)
@@ -327,7 +309,8 @@ export const useStore = create<State>((set, get) => ({
     } catch (e) {
       // 恢复的标签若已失效（文档被删），顺手移除
       const openTabs = get().openTabs.filter((t) => t.id !== id)
-      set({ error: String(e), loading: false, openTabs })
+      toast.error(String(e))
+      set({ loading: false, openTabs })
       persistTabs(openTabs)
     }
   },
@@ -430,10 +413,8 @@ export const useStore = create<State>((set, get) => ({
       await get().refreshAnnotations(docId)
       return saved
     } catch (e) {
-      set((s) => ({
-        annotations: s.annotations.filter((a) => a.id !== tmp.id),
-        error: String(e),
-      }))
+      set((s) => ({ annotations: s.annotations.filter((a) => a.id !== tmp.id) }))
+      toast.error(String(e))
       return null
     }
   },
@@ -443,8 +424,6 @@ export const useStore = create<State>((set, get) => ({
     const doc = get().currentDoc
     if (doc) await get().refreshAnnotations(doc.id)
   },
-
-  clearError: () => set({ error: null }),
 
   /**
    * 把文献移动到文件夹。
@@ -484,13 +463,13 @@ export const useStore = create<State>((set, get) => ({
       await get().refreshLibrary()
     } catch (e) {
       set({
-        error: `移动失败：${String(e).replace(/^Error:\s*/, '')}`,
         documents: get().documents.map((d) =>
           d.id === docId
             ? { ...d, folders: get().folders.filter((f) => prev.includes(f.id)) }
             : d,
         ),
       })
+      toast.error(`移动失败：${String(e).replace(/^Error:\s*/, '')}`)
     }
   },
 
@@ -511,7 +490,7 @@ export const useStore = create<State>((set, get) => ({
       })
       await get().refreshAIConfig()
     } catch (e) {
-      set({ error: String(e) })
+      toast.error(String(e))
     }
   },
 
@@ -579,7 +558,7 @@ export const useStore = create<State>((set, get) => ({
   startParse: async (engine = 'auto') => {
     const doc = get().currentDoc
     if (!doc) return
-    set({ parseState: 'running', parseProgress: 5, error: null })
+    set({ parseState: 'running', parseProgress: 5 })
     try {
       const r = await api.startParse(doc.id, engine)
       if (r.state === 'done') {
@@ -591,7 +570,8 @@ export const useStore = create<State>((set, get) => ({
         await get().pollParse(doc.id)
       }
     } catch (e) {
-      set({ parseState: 'failed', error: String(e) })
+      set({ parseState: 'failed' })
+      toast.error(String(e))
     }
     // 段落 id 已整体替换：刷新标注（段落流标注已迁移/解除锚定）与文档元数据（parse_engine）
     await get().refreshCurrentDocMeta()
@@ -601,8 +581,14 @@ export const useStore = create<State>((set, get) => ({
   pollParse: async (docId) => {
     for (let i = 0; i < 600; i++) {
       await new Promise((r) => setTimeout(r, 2500))
+      // 守卫：用户已切到其他文档时停止轮询，避免旧文档的解析进度
+      // 污染新文档的 parseState（后端解析照常进行，回到该文档时
+      // syncParseState 会自愈恢复状态）
+      if (get().currentDoc?.id !== docId) return
       try {
         const p = await api.parseProgress(docId)
+        // 请求在途期间又切走：结果丢弃
+        if (get().currentDoc?.id !== docId) return
         set({ parseState: p.state, parseProgress: p.progress ?? 0 })
         if (p.state === 'done') {
           await get().loadSegments(docId)
@@ -610,11 +596,13 @@ export const useStore = create<State>((set, get) => ({
           return
         }
         if (p.state === 'failed') {
-          set({ error: p.error ?? '解析失败' })
+          toast.error(p.error ?? '解析失败')
           return
         }
       } catch (e) {
-        set({ parseState: 'failed', error: String(e) })
+        if (get().currentDoc?.id !== docId) return
+        set({ parseState: 'failed' })
+        toast.error(String(e))
         return
       }
     }
@@ -648,6 +636,9 @@ export const useStore = create<State>((set, get) => ({
       }
       try {
         const resp = await api.translateSegments(docId, chunk, false, eng)
+        // 守卫：批次在途期间用户切走了文档，剩余结果全部丢弃
+        // （openDocument 已把 translations 重置为新文档的，写入会串库）
+        if (get().currentDoc?.id !== docId) { dropInflight(); return }
         const translations = { ...get().translations }
         for (const r of resp.results) {
           if (r.text) translations[r.segment_id] = { text: r.text, provider: r.provider }
@@ -658,11 +649,9 @@ export const useStore = create<State>((set, get) => ({
         if (resp.errors?.length) {
           errStreak++
           const first = resp.errors[0].error || ''
-          set({
-            error: first.includes('限流') || first.includes('429')
-              ? '接口限流，已自动重试；建议调小并发或稍后再试'
-              : `翻译失败：${first.slice(0, 120)}`,
-          })
+          toast.error(first.includes('限流') || first.includes('429')
+            ? '接口限流，已自动重试；建议调小并发或稍后再试'
+            : `翻译失败：${first.slice(0, 120)}`)
           if (errStreak >= MAX_ERRORS) break
           // 限流时放慢节奏
           await new Promise((r) => setTimeout(r, 1500 * errStreak))
@@ -671,7 +660,7 @@ export const useStore = create<State>((set, get) => ({
         }
       } catch (e) {
         dropInflight()
-        set({ error: String(e).slice(0, 160) })
+        toast.error(String(e).slice(0, 160))
         break
       }
     }

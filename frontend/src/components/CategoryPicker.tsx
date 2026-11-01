@@ -80,7 +80,7 @@ export default function CategoryPicker({ value, onChange }: {
       </div>
 
       {invalid && (
-        <div style={{ fontSize: 11, color: '#b91c1c', marginTop: 3 }}>{invalid}</div>
+        <div style={{ fontSize: 11, color: 'var(--err)', marginTop: 3 }}>{invalid}</div>
       )}
 
       {open && matches.length > 0 && (

@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, type ReaderGoal, type ReaderSession, type SummaryItem, type SummaryKind } from '../api/client'
 import { useStore } from '../stores/useStore'
 import MarkdownView from './MarkdownView'
+import { ChatInput, ChatThread, InlineError } from './ChatThread'
 
 const POLL_MS = 900
 
@@ -40,7 +41,7 @@ export default function SummaryPanel() {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [coachError, setCoachError] = useState<string | null>(null)
-  const threadRef = useRef<HTMLDivElement>(null)
+  const requestJump = useStore((s) => s.requestJump)
 
   const timerRef = useRef<number | null>(null)
   const cancelledRef = useRef(false)
@@ -241,12 +242,6 @@ export default function SummaryPanel() {
     await reloadSessions()
   }
 
-  // 会话有更新时滚到底部
-  useEffect(() => {
-    const el = threadRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [activeSession?.messages.length, sending])
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       {/* 控制区：主流程是速读卡，其余总结方式折叠 */}
@@ -324,10 +319,9 @@ export default function SummaryPanel() {
         )}
 
         {error && (
-          <div style={{
-            marginTop: 8, fontSize: 11, color: '#b91c1c', background: '#ef44441a',
-            padding: '6px 8px', borderRadius: 6, lineHeight: 1.5, wordBreak: 'break-word',
-          }}>{error}</div>
+          <div style={{ marginTop: 8 }}>
+            <InlineError>{error}</InlineError>
+          </div>
         )}
       </div>
 
@@ -390,10 +384,9 @@ export default function SummaryPanel() {
             </div>
 
             {coachError && (
-              <div style={{
-                marginBottom: 8, fontSize: 11, color: '#b91c1c', background: '#ef44441a',
-                padding: '6px 8px', borderRadius: 6, lineHeight: 1.5, wordBreak: 'break-word',
-              }}>{coachError}</div>
+              <div style={{ marginBottom: 8 }}>
+                <InlineError>{coachError}</InlineError>
+              </div>
             )}
 
             {activeSession && (
@@ -409,54 +402,21 @@ export default function SummaryPanel() {
                     onClick={() => void removeSession(activeSession.id)}
                   >删除会话</button>
                 </div>
-                <div
-                  ref={threadRef}
-                  style={{
-                    maxHeight: 320, overflowY: 'auto', display: 'flex',
-                    flexDirection: 'column', gap: 8, marginBottom: 8,
-                  }}
-                >
-                  {activeSession.messages.map((m, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                        maxWidth: '92%',
-                        padding: '6px 10px',
-                        borderRadius: 8,
-                        fontSize: 12,
-                        lineHeight: 1.6,
-                        background: m.role === 'user' ? 'var(--accent)' : 'var(--bg-card, #fff)',
-                        color: m.role === 'user' ? '#fff' : 'var(--fg)',
-                        border: m.role === 'user' ? 'none' : '1px solid var(--border)',
-                      }}
-                    >
-                      {m.role === 'user' ? m.content : <MarkdownView text={m.content} />}
-                    </div>
-                  ))}
-                  {sending && (
-                    <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>教练思考中…</div>
-                  )}
-                </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <textarea
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    rows={2}
-                    disabled={sending}
-                    placeholder="回答教练的问题 / 追问论文细节…"
-                    style={{ flex: 1, fontSize: 12, padding: '6px 8px', resize: 'vertical' }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void sendMessage()
-                    }}
-                  />
-                  <button
-                    className="btn-primary"
-                    style={{ fontSize: 12, alignSelf: 'flex-end' }}
-                    onClick={() => void sendMessage()}
-                    disabled={sending || !draft.trim()}
-                  >发送</button>
-                </div>
+                <ChatThread
+                  style={{ maxHeight: 320, marginBottom: 8 }}
+                  messages={activeSession.messages}
+                  sending={sending}
+                  sendingLabel="教练思考中…"
+                  onCiteClick={requestJump}
+                />
+                <ChatInput
+                  draft={draft}
+                  onDraftChange={setDraft}
+                  onSend={() => void sendMessage()}
+                  sending={sending}
+                  placeholder="回答教练的问题 / 追问论文细节…"
+                  style={{ borderTop: 'none', padding: 0 }}
+                />
               </div>
             )}
           </div>

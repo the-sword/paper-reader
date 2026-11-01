@@ -118,8 +118,8 @@ export default function QueueIndicator() {
                   fontSize: 10, padding: '0 5px', borderRadius: 3,
                   background:
                     it.status === 'running' ? 'var(--accent)'
-                    : it.status === 'failed' ? '#ef444433'
-                    : it.status === 'done' ? '#22c55e33'
+                    : it.status === 'failed' ? 'var(--err-bg)'
+                    : it.status === 'done' ? 'var(--ok-soft)'
                     : 'var(--border)',
                   color: it.status === 'running' ? '#fff' : 'var(--fg)',
                   flexShrink: 0,
@@ -146,7 +146,7 @@ export default function QueueIndicator() {
                 )}
               </div>
               {it.error && it.status === 'failed' && (
-                <div style={{ fontSize: 10, color: '#b91c1c', marginTop: 3 }}>
+                <div style={{ fontSize: 10, color: 'var(--err)', marginTop: 3 }}>
                   {it.error.slice(0, 100)}
                 </div>
               )}

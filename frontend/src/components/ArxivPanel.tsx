@@ -184,8 +184,8 @@ export default function ArxivPanel({ onClose }: { onClose: () => void }) {
 
           {error && (
             <div style={{
-              marginTop: 10, fontSize: 11, color: '#b91c1c',
-              background: '#ef44441a', padding: '6px 9px', borderRadius: 6, lineHeight: 1.5,
+              marginTop: 10, fontSize: 11, color: 'var(--err)',
+              background: 'var(--err-bg)', padding: '6px 9px', borderRadius: 6, lineHeight: 1.5,
             }}>{error}</div>
           )}
         </div>

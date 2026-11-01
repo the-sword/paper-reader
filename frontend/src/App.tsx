@@ -17,6 +17,7 @@ import ReaderToolbar from './components/ReaderToolbar'
 import CommandPalette, { type PaletteCommand } from './components/CommandPalette'
 import ReparseMenu from './components/ReparseMenu'
 import LibraryView from './components/LibraryView'
+import Toasts from './components/Toasts'
 import { useStore } from './stores/useStore'
 import { useBilingualJob, type BilingualTarget } from './hooks/useBilingualJob'
 import { useQueueWatch } from './hooks/useQueueWatch'
@@ -36,8 +37,6 @@ const SCALE_STEP = 0.15
 const MOBILE_SCALE_MIN = 0.15
 /** 跳页定位后目标页闪烁描边的时长（毫秒） */
 const FLASH_MS = 600
-/** 解析迁移提示条的显示时长（毫秒） */
-const NOTICE_MS = 8000
 
 /** 阅读主题的切换顺序（值与 ReaderSettings 中的 theme 一致） */
 const THEME_CYCLE: Array<{ value: ReaderPrefs['theme']; label: string }> = [
@@ -64,9 +63,7 @@ function isTypingTarget(t: EventTarget | null): boolean {
 
 export default function App() {
   const currentDoc = useStore((s) => s.currentDoc)
-  const error = useStore((s) => s.error)
   const loading = useStore((s) => s.loading)
-  const clearError = useStore((s) => s.clearError)
   const refreshSidebar = useStore((s) => s.refreshSidebar)
   const refreshLibrary = useStore((s) => s.refreshLibrary)
   const mainView = useStore((s) => s.mainView)
@@ -76,9 +73,6 @@ export default function App() {
   const leftOpen = useStore((s) => s.leftOpen)
   const jumpRequest = useStore((s) => s.jumpRequest)
   const showReparse = useStore((s) => s.showReparse)
-  const notice = useStore((s) => s.notice)
-  const noticeAction = useStore((s) => s.noticeAction)
-  const setNotice = useStore((s) => s.setNotice)
   const bilingualViewRequest = useStore((s) => s.bilingualViewRequest)
   const setShowReparse = useStore((s) => s.setShowReparse)
   const rightTab = useStore((s) => s.rightTab)
@@ -235,6 +229,10 @@ export default function App() {
       }
       if (typeof values.reader_theme === 'string') {
         setReaderPrefs((p) => ({ ...p, theme: values.reader_theme as ReaderPrefs['theme'] }))
+      }
+      // 翻译引擎偏好：划词翻译与段落翻译都读 store 里的 selectedEngine
+      if (typeof values.selected_engine === 'string') {
+        useStore.getState().setSelectedEngine(values.selected_engine || null)
       }
       if (typeof values.panel_notes === 'number') setWNotes(values.panel_notes)
       // 右栏显隐：有偏好用偏好，否则宽屏默认展开；手机端抽屉始终默认收起（偏好只约束桌面）
@@ -399,18 +397,6 @@ export default function App() {
     void refreshLibrary()
   }, [refreshSidebar, refreshLibrary])
 
-  useEffect(() => {
-    if (!error) return
-    const t = setTimeout(clearError, 7000)
-    return () => clearTimeout(t)
-  }, [error, clearError])
-
-  useEffect(() => {
-    if (!notice) return
-    const t = setTimeout(() => setNotice(null), NOTICE_MS)
-    return () => clearTimeout(t)
-  }, [notice, setNotice])
-
   // 队列完成通知的「查看」：打开该文档并切到双语视图（先切视图再开文档，
   // 让 openDocument 完成后直接落在双语 PDF 上）。
   // ready 竞态处理：切文档后 babelDocStatus 异步查询未返回时 ready 为空，
@@ -424,10 +410,9 @@ export default function App() {
         .catch(() => { /* 忽略 */ })
         .finally(() => {
           switchView('bilingual')
-          setNotice(null)
         })
     })
-    // switchView/setNotice 每渲染重建，依赖 requestId 的 nonce 触发即可
+    // switchView 每渲染重建，依赖 requestId 的 nonce 触发即可
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bilingualViewRequest?.nonce])
 
@@ -653,42 +638,8 @@ export default function App() {
       {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
       {showReparse && <ReparseMenu />}
 
-      {notice && !error && (
-        // 轻量提示：中性配色，不同于错误条；带动作时点击整条触发（如队列完成「查看」）
-        <div
-          onClick={() => {
-            if (noticeAction) {
-              noticeAction.run()
-              return
-            }
-            setNotice(null)
-          }}
-          style={{
-            position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)',
-            background: 'var(--bg-card)', color: 'var(--fg)', border: '1px solid var(--border)',
-            padding: '8px 14px', borderRadius: 8, boxShadow: 'var(--shadow-pop)',
-            fontSize: 12, maxWidth: '70vw', zIndex: 3000, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', gap: 10,
-          }}
-        >
-          <span>{notice}</span>
-          {noticeAction && (
-            <span style={{ color: 'var(--accent)', fontWeight: 600, flexShrink: 0 }}>
-              {noticeAction.label}
-            </span>
-          )}
-        </div>
-      )}
-
-      {error && (
-        <div style={{
-          position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)',
-          background: '#7f1d1d', color: '#fff', padding: '10px 16px', borderRadius: 8,
-          fontSize: 12, maxWidth: '70vw', zIndex: 3000,
-        }}>
-          {error}
-        </div>
-      )}
+      {/* 全局 toast（错误 / 中性提示 / 成功确认，含队列完成与雷达动作） */}
+      <Toasts />
     </div>
   )
 }

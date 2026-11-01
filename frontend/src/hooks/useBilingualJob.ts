@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../stores/useStore'
+import { toast } from '../stores/useToast'
 import { api } from '../api/client'
 
 /** 双语 PDF 任务进度轮询间隔（毫秒） */
@@ -80,10 +81,10 @@ export function useBilingualJob(onDone: (target: BilingualTarget, docId: string)
         onDoneRef.current(targetRef.current, docId)
         return
       }
-      useStore.setState({ error: `双语 PDF 生成失败：${st.error ?? '未知原因'}` })
+      toast.error(`双语 PDF 生成失败：${st.error ?? '未知原因'}`)
     } catch (e) {
       finish()
-      useStore.setState({ error: `双语 PDF：${String(e).replace(/^Error:\s*/, '')}` })
+      toast.error(`双语 PDF：${String(e).replace(/^Error:\s*/, '')}`)
     }
   }
 
@@ -93,14 +94,13 @@ export function useBilingualJob(onDone: (target: BilingualTarget, docId: string)
     targetRef.current = target
     setTarget(target)
     setRunning(true); setProgress(START_PROGRESS); setMessage('启动任务')
-    useStore.setState({ error: null })
     try {
       const { job_id } = await api.startBabelDoc(doc.id)
       setJobId(job_id)
       pollRef.current = window.setInterval(() => { void pollJob(job_id, doc.id) }, POLL_MS)
     } catch (e) {
       finish()
-      useStore.setState({ error: String(e).replace(/^Error:\s*/, '') })
+      toast.error(String(e).replace(/^Error:\s*/, ''))
     }
   }
 

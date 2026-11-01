@@ -9,6 +9,7 @@
 import { useEffect, useRef } from 'react'
 import { api } from '../api/client'
 import { useStore } from '../stores/useStore'
+import { toast } from '../stores/useToast'
 
 export function useQueueWatch(onBusyEdge?: (busy: boolean) => void): void {
   /** 上一轮快照中各条目的状态：用于检测 running→done 的完成边沿 */
@@ -34,13 +35,13 @@ export function useQueueWatch(onBusyEdge?: (busy: boolean) => void): void {
           (it) => it.status === 'done' && prevStatus.current.get(it.doc_id) === 'running',
         )
         if (finished.length === 1) {
-          useStore.getState().setNotice(`《${finished[0].title}》双语版已就绪`, {
+          toast.notice(`《${finished[0].title}》双语版已就绪`, {
             label: '查看',
             run: () => { useStore.getState().requestBilingualView(finished[0].doc_id) },
           })
         } else if (finished.length > 1) {
           const first = finished[0]
-          useStore.getState().setNotice(`${finished.length} 篇论文双语版已就绪（含《${first.title}》）`, {
+          toast.notice(`${finished.length} 篇论文双语版已就绪（含《${first.title}》）`, {
             label: '查看',
             run: () => { useStore.getState().requestBilingualView(first.doc_id) },
           })
